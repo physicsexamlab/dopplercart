@@ -208,12 +208,17 @@
 //  s=0-9, c=1-4 を全列挙して optionalServices に渡す
 // ═══════════════════════════════════════════════
 // 実機確認済みUUID（nRF Connect で検証）
-// 正しいパターン: 4a5c000{X}-0000-0000-0000-5c1e741f1c00
+// Service:        4a5c000{s}-0000-0000-0000-5c1e741f1c00
+// Characteristic: 4a5c000{s}-000{c}-0000-0000-5c1e741f1c00
 const ALL_PASCO_UUIDS = [];
 for (let s = 0; s <= 9; s++) {
   ALL_PASCO_UUIDS.push(`4a5c000${s}-0000-0000-0000-5c1e741f1c00`);
+  for (let c = 1; c <= 9; c++) {
+    ALL_PASCO_UUIDS.push(`4a5c000${s}-000${c}-0000-0000-5c1e741f1c00`);
+  }
 }
-const POSITION_SERVICE_EXPECTED = '4a5c0003-0000-0000-0000-5c1e741f1c00';
+const POSITION_SERVICE    = '4a5c0003-0000-0000-0000-5c1e741f1c00';
+const POSITION_NOTIFY_CHAR = '4a5c0003-0002-0000-0000-5c1e741f1c00';
 
 // position = countAccumulated * 0.09895 / 816  [m]
 const POS_SCALE = 0.09895 / 816;
@@ -259,8 +264,20 @@ let recordStartTime = 0;
 // ═══════════════════════════════════════════════
 //  BLE notify コールバック（生カウント累積）
 // ═══════════════════════════════════════════════
+let notifyPacketCount = 0;
+
 function handlePositionNotify(event) {
   const data = event.target.value; // DataView
+  notifyPacketCount++;
+
+  // 生バイトをログ（最初の10パケットのみ）
+  if (notifyPacketCount <= 10) {
+    const bytes = Array.from(new Uint8Array(data.buffer))
+      .map(b => b.toString(16).padStart(2,'0')).join(' ');
+    log(`pkt#${notifyPacketCount} [${data.byteLength}B]: ${bytes}`);
+  }
+  if (notifyPacketCount === 11) log('(以降のパケットログは省略)');
+
   if (data.byteLength < 3) return;
 
   const seq = data.getUint8(0);
@@ -427,40 +444,25 @@ async function connectSmartCart() {
     const server = await bleDevice.gatt.connect();
     log('GATT connected. Discovering primary services …');
 
-    const services = await server.getPrimaryServices();
-    log(`Found ${services.length} primary service(s):`);
-    for (const svc of services) log('  svc: ' + svc.uuid);
+    // Position サービスに直接アクセス
+    log(`Getting position service: ${POSITION_SERVICE}`);
+    const posSvc = await server.getPrimaryService(POSITION_SERVICE);
+    log('Position service OK. Getting characteristics...');
 
-    // notify 可能な Characteristic を全サービスから探索
-    let notifyChar = null;
-    let foundSvcUuid = null;
-
-    for (const svc of services) {
-      let chars;
-      try { chars = await svc.getCharacteristics(); }
-      catch (e) { log(`  getCharacteristics failed for ${svc.uuid}: ${e.message}`); continue; }
-
-      for (const c of chars) {
-        const props = Object.keys(c.properties).filter(k => c.properties[k]).join(',');
-        log(`    char: ${c.uuid}  [${props}]`);
-        if (c.properties.notify && !notifyChar) {
-          notifyChar = c;
-          foundSvcUuid = svc.uuid;
-        }
-      }
+    const chars = await posSvc.getCharacteristics();
+    log(`${chars.length} characteristic(s):`);
+    for (const c of chars) {
+      const PROP_NAMES = ['broadcast','read','writeWithoutResponse','write','notify','indicate'];
+      const props = PROP_NAMES.filter(p => c.properties[p]);
+      log(`  ${c.uuid}  [${props.join(',') || 'none'}]`);
     }
 
-    if (!notifyChar) throw new Error('Notify characteristic が見つかりませんでした。上の診断ログを確認してください。');
-
-    log(`\nUsing notify char: ${notifyChar.uuid}`);
-    log(`in service:        ${foundSvcUuid}`);
-    if (foundSvcUuid !== POSITION_SERVICE_EXPECTED) {
-      log(`(期待UUID ${POSITION_SERVICE_EXPECTED} と異なります → ハンドオフ文書の更新が必要かもしれません)`);
-    }
-
+    // Position notify char を UUID 指定で取得
+    log(`\nGetting notify char: ${POSITION_NOTIFY_CHAR}`);
+    const notifyChar = await posSvc.getCharacteristic(POSITION_NOTIFY_CHAR);
     await notifyChar.startNotifications();
     notifyChar.addEventListener('characteristicvaluechanged', handlePositionNotify);
-    log('Notifications started.');
+    log('Notifications started on position char.');
 
     setConnected(true, bleDevice.name);
     document.getElementById('btnStart').disabled = false;
