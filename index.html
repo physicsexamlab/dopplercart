@@ -217,9 +217,11 @@ for (let s = 0; s <= 9; s++) {
     ALL_PASCO_UUIDS.push(`4a5c000${s}-000${c}-0000-0000-5c1e741f1c00`);
   }
 }
+const DEVICE_SERVICE       = '4a5c0000-0000-0000-0000-5c1e741f1c00';
+const DEVICE_CMD_CHAR      = '4a5c0000-0002-0000-0000-5c1e741f1c00'; // write command
 const POSITION_SERVICE     = '4a5c0003-0000-0000-0000-5c1e741f1c00';
 const POSITION_CMD_CHAR    = '4a5c0003-0002-0000-0000-5c1e741f1c00'; // writeWithoutResponse
-const POSITION_NOTIFY_CHAR = '4a5c0003-0004-0000-0000-5c1e741f1c00'; // read,notify
+const POSITION_ACK_CHAR    = '4a5c0003-0005-0000-0000-5c1e741f1c00'; // ACK char
 
 // position = countAccumulated * 0.09895 / 816  [m]
 const POS_SCALE = 0.09895 / 816;
@@ -234,6 +236,7 @@ const MAX_POINTS = 300;
 //  状態変数
 // ═══════════════════════════════════════════════
 let bleDevice = null;
+let posAckChar = null;
 let isRecording = false;
 
 // BLE notify 側で更新する生カウント累積値
@@ -278,6 +281,12 @@ function handlePositionNotify(event) {
     log(`pkt#${notifyPacketCount} [${data.byteLength}B]: ${bytes}`);
   }
   if (notifyPacketCount === 11) log('(以降のパケットログは省略)');
+
+  // data[0] <= 0x1F → 周期データパケット → ACK を返す
+  if (data.byteLength >= 1 && data.getUint8(0) <= 0x1F && posAckChar) {
+    posAckChar.writeValueWithoutResponse(new Uint8Array([data.getUint8(0)]))
+      .catch(() => {});
+  }
 
   if (data.byteLength < 3) return;
 
@@ -458,37 +467,45 @@ async function connectSmartCart() {
       log(`  ${c.uuid}  [${props.join(',') || 'none'}]`);
     }
 
-    // ── 0003（write+notify+indicate）にサブスクライブ ──
+    // ── デバイスサービスの cmd/recv char を取得 ──
+    log('Getting device service...');
+    const devSvc  = await server.getPrimaryService(DEVICE_SERVICE);
+    const devCmd  = await devSvc.getCharacteristic(DEVICE_CMD_CHAR);
+    const devRecv = await devSvc.getCharacteristic('4a5c0000-0003-0000-0000-5c1e741f1c00');
+    await devRecv.startNotifications();
+    devRecv.addEventListener('characteristicvaluechanged', (e) => {
+      const b = Array.from(new Uint8Array(e.target.value.buffer)).map(x=>x.toString(16).padStart(2,'0')).join(' ');
+      log(`[dev recv] ${b}`);
+    });
+    log('Device service ready.');
+
+    // ── Wireless RMS スタートコマンド [0x37, 0x01, 0x00] ──
+    await devCmd.writeValueWithoutResponse(new Uint8Array([0x37, 0x01, 0x00]));
+    log('Sent WIRELESS_RMS_START [37 01 00] to device cmd.');
+    await new Promise(r => setTimeout(r, 300));
+
+    // ── Position サービスの 0003, 0004 両方サブスクライブ ──
     const char0003 = await posSvc.getCharacteristic('4a5c0003-0003-0000-0000-5c1e741f1c00');
     await char0003.startNotifications();
     char0003.addEventListener('characteristicvaluechanged', (e) => {
       const b = Array.from(new Uint8Array(e.target.value.buffer)).map(x=>x.toString(16).padStart(2,'0')).join(' ');
-      log(`[0003 notify] ${b}`);
+      log(`[pos 0003] ${b}`);
+      handlePositionNotify(e);
     });
-    log('Subscribed to 0003.');
+    log('Subscribed to pos 0003.');
 
-    // ── 0004（read+notify）を直接 read して現在値確認 ──
     const char0004 = await posSvc.getCharacteristic('4a5c0003-0004-0000-0000-5c1e741f1c00');
-    try {
-      const val = await char0004.readValue();
-      const b = Array.from(new Uint8Array(val.buffer)).map(x=>x.toString(16).padStart(2,'0')).join(' ');
-      log(`[0004 read]   ${b}`);
-    } catch(e) { log(`[0004 read]   error: ${e.message}`); }
-
-    // ── 0004 notify サブスクライブ（実データ用）──
     await char0004.startNotifications();
-    char0004.addEventListener('characteristicvaluechanged', handlePositionNotify);
-    log('Subscribed to 0004 notify (position data).');
+    char0004.addEventListener('characteristicvaluechanged', (e) => {
+      const b = Array.from(new Uint8Array(e.target.value.buffer)).map(x=>x.toString(16).padStart(2,'0')).join(' ');
+      log(`[pos 0004] ${b}`);
+      handlePositionNotify(e);
+    });
+    log('Subscribed to pos 0004.');
 
-    // ── 0002 に各種コマンドを試す ──
-    const cmdChar = await posSvc.getCharacteristic(POSITION_CMD_CHAR);
-    for (const cmd of [[0x01],[0x00,0x01],[0x01,0x00],[0x03],[0x53,0x01]]) {
-      try {
-        await cmdChar.writeValueWithoutResponse(new Uint8Array(cmd));
-        log(`Sent cmd [${cmd.map(x=>x.toString(16)).join(' ')}] to 0002`);
-        await new Promise(r => setTimeout(r, 200));
-      } catch(e) { log(`cmd error: ${e.message}`); }
-    }
+    // ACK char を保持（handlePositionNotify から使う）
+    posAckChar = await posSvc.getCharacteristic(POSITION_ACK_CHAR);
+    log('Position ACK char ready.');
 
     setConnected(true, bleDevice.name);
     document.getElementById('btnStart').disabled = false;
