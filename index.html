@@ -217,8 +217,9 @@ for (let s = 0; s <= 9; s++) {
     ALL_PASCO_UUIDS.push(`4a5c000${s}-000${c}-0000-0000-5c1e741f1c00`);
   }
 }
-const POSITION_SERVICE    = '4a5c0003-0000-0000-0000-5c1e741f1c00';
-const POSITION_NOTIFY_CHAR = '4a5c0003-0002-0000-0000-5c1e741f1c00';
+const POSITION_SERVICE     = '4a5c0003-0000-0000-0000-5c1e741f1c00';
+const POSITION_CMD_CHAR    = '4a5c0003-0002-0000-0000-5c1e741f1c00'; // writeWithoutResponse
+const POSITION_NOTIFY_CHAR = '4a5c0003-0004-0000-0000-5c1e741f1c00'; // read,notify
 
 // position = countAccumulated * 0.09895 / 816  [m]
 const POS_SCALE = 0.09895 / 816;
@@ -457,8 +458,14 @@ async function connectSmartCart() {
       log(`  ${c.uuid}  [${props.join(',') || 'none'}]`);
     }
 
-    // Position notify char を UUID 指定で取得
-    log(`\nGetting notify char: ${POSITION_NOTIFY_CHAR}`);
+    // 0002（writeWithoutResponse）に有効化コマンドを送る
+    log(`\nSending enable command to ${POSITION_CMD_CHAR} ...`);
+    const cmdChar = await posSvc.getCharacteristic(POSITION_CMD_CHAR);
+    await cmdChar.writeValueWithoutResponse(new Uint8Array([0x01]));
+    log('Enable command sent.');
+
+    // 0004（read,notify）をサブスクライブ
+    log(`Subscribing to ${POSITION_NOTIFY_CHAR} ...`);
     const notifyChar = await posSvc.getCharacteristic(POSITION_NOTIFY_CHAR);
     await notifyChar.startNotifications();
     notifyChar.addEventListener('characteristicvaluechanged', handlePositionNotify);
