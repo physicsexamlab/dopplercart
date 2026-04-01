@@ -1,0 +1,663 @@
+<!--
+  Physics Exam Lab - Doppler Cart
+  Copyright (c) 2026 一般社団法人 国際物理オリンピック2023記念協会
+  Licensed under the Creative Commons BY-NC 4.0 International License.
+  See https://creativecommons.org/licenses/by-nc/4.0/
+-->
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Smart Cart Position Monitor</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Exo+2:wght@300;600;800&display=swap');
+
+  :root {
+    --bg:        #f0f4f8;
+    --panel:     #ffffff;
+    --border:    #bdd0e4;
+    --text:      #1a2b3c;
+    --dim:       #6b8099;
+    --header-bg: rgba(240,244,248,0.95);
+    --grid-line: rgba(0,80,160,0.04);
+
+    --col-pos:   #0077cc;
+    --col-vel:   #4a8c00;
+    --danger:    #d42045;
+    --warn:      #b86e00;
+    --accent2:   #008855;
+    --chart-bg:  #f8fbff;
+    --chart-grid:rgba(160,185,210,0.6);
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: 'Exo 2', sans-serif; font-weight: 300;
+    min-height: 100vh; display: flex; flex-direction: column;
+  }
+  body::before {
+    content: ''; position: fixed; inset: 0;
+    background-image:
+      linear-gradient(var(--grid-line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+    background-size: 40px 40px; pointer-events: none; z-index: 0;
+  }
+
+  header {
+    position: relative; z-index: 10;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 28px; border-bottom: 1px solid var(--border);
+    background: var(--header-bg); backdrop-filter: blur(10px);
+  }
+  .logo {
+    font-size: 1.15rem; font-weight: 800; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--col-pos);
+  }
+  .logo em { font-style: normal; color: var(--col-vel); }
+
+  #statusBadge {
+    display: flex; align-items: center; gap: 7px;
+    font-family: 'Share Tech Mono', monospace; font-size: 0.78rem; color: var(--dim);
+  }
+  #statusDot { width: 7px; height: 7px; border-radius: 50%; background: var(--dim); }
+  #statusBadge.connected { color: var(--accent2); }
+  #statusBadge.connected #statusDot { background: var(--accent2); animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+  main {
+    position: relative; z-index: 1; flex: 1;
+    display: flex; flex-direction: column; gap: 18px;
+    padding: 20px 28px; max-width: 1400px; width: 100%; margin: 0 auto;
+  }
+
+  .controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  button {
+    font-family: 'Exo 2', sans-serif; font-weight: 600; font-size: 0.82rem;
+    letter-spacing: 0.08em; text-transform: uppercase; padding: 9px 20px;
+    border-radius: 4px; border: 1px solid transparent; cursor: pointer;
+    transition: all 0.2s; background: transparent;
+  }
+  button:disabled { opacity: 0.35; cursor: not-allowed; }
+  .btn-connect { border-color: var(--col-pos); color: var(--col-pos); }
+  .btn-connect:hover:not(:disabled) { background: var(--col-pos); color: #fff; }
+  .btn-start   { border-color: var(--accent2); color: var(--accent2); }
+  .btn-start:hover:not(:disabled) { background: var(--accent2); color: #fff; }
+  .btn-stop    { border-color: var(--danger); color: var(--danger); }
+  .btn-stop:hover:not(:disabled) { background: var(--danger); color: #fff; }
+  .btn-reset   { border-color: var(--dim); color: var(--dim); }
+  .btn-reset:hover:not(:disabled) { background: var(--dim); color: #fff; }
+  .btn-csv     { border-color: var(--warn); color: var(--warn); margin-left: auto; }
+  .btn-csv:hover:not(:disabled) { background: var(--warn); color: #fff; }
+
+  .stats-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  @media (max-width: 700px) { .stats-row { grid-template-columns: repeat(2, 1fr); } }
+  .stat-card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+    padding: 12px 16px;
+  }
+  .stat-card.pos { border-left: 3px solid var(--col-pos); }
+  .stat-card.vel { border-left: 3px solid var(--col-vel); }
+  .stat-label { font-size: 0.65rem; text-transform: uppercase; color: var(--dim); margin-bottom: 4px; }
+  .stat-value { font-family: 'Share Tech Mono', monospace; font-size: 1.4rem; }
+
+  .chart-panel {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 16px 18px;
+  }
+  .chart-panel.pos { border-top: 2px solid var(--col-pos); }
+  .chart-panel.vel { border-top: 2px solid var(--col-vel); }
+  .chart-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 12px; }
+  .chart-title  { font-size: 0.7rem; letter-spacing: 0.15em; text-transform: uppercase; color: var(--dim); }
+
+  /* modal */
+  .modal-overlay {
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.4);
+    backdrop-filter: blur(4px); z-index: 100; align-items: center; justify-content: center;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal {
+    background: var(--panel); padding: 24px; width: min(720px, 95vw);
+    border-radius: 8px; display: flex; flex-direction: column; gap: 14px;
+  }
+  textarea.csv-out {
+    min-height: 300px; font-family: 'Share Tech Mono', monospace;
+    font-size: 0.78rem; padding: 10px; border: 1px solid var(--border); border-radius: 4px;
+  }
+  .modal-footer { display: flex; justify-content: space-between; align-items: center; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">Smart Cart <em>Position</em> Monitor</div>
+  <div id="statusBadge">
+    <div id="statusDot"></div>
+    <span id="statusText">DISCONNECTED</span>
+  </div>
+</header>
+
+<main>
+  <div class="controls">
+    <button class="btn-connect" id="btnConnect">Connect Smart Cart</button>
+    <button class="btn-start"   id="btnStart"  disabled>Record</button>
+    <button class="btn-stop"    id="btnStop"   disabled>Stop</button>
+    <button class="btn-reset"   id="btnReset"  disabled>Reset</button>
+    <button class="btn-csv"     id="btnCsv"    disabled>CSV Export</button>
+  </div>
+
+  <div class="stats-row">
+    <div class="stat-card pos">
+      <div class="stat-label">Position</div>
+      <div class="stat-value" id="sPosLast">—</div>
+    </div>
+    <div class="stat-card pos">
+      <div class="stat-label">Range (Min / Max)</div>
+      <div class="stat-value" id="sPosRange">—</div>
+    </div>
+    <div class="stat-card vel">
+      <div class="stat-label">Velocity</div>
+      <div class="stat-value" id="sVelLast">—</div>
+    </div>
+    <div class="stat-card vel">
+      <div class="stat-label">Sample Count</div>
+      <div class="stat-value" id="sSampleCount">0</div>
+    </div>
+  </div>
+
+  <details id="diagDetails" style="background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:8px 14px;">
+    <summary style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.1em;color:var(--dim);cursor:pointer;">Diagnostic Log</summary>
+    <pre id="diagLog" style="font-family:'Share Tech Mono',monospace;font-size:0.72rem;color:var(--text);margin-top:8px;max-height:180px;overflow-y:auto;white-space:pre-wrap;"></pre>
+  </details>
+
+  <div style="display:flex; flex-direction:column; gap:16px;">
+    <div class="chart-panel pos">
+      <div class="chart-header">
+        <div class="chart-title">Position (m)</div>
+        <div id="posAxisLabel" style="font-family:'Share Tech Mono',monospace;font-size:0.7rem;color:var(--dim);"></div>
+      </div>
+      <canvas id="chartPos" height="200"></canvas>
+    </div>
+    <div class="chart-panel vel">
+      <div class="chart-header">
+        <div class="chart-title">Velocity (m/s)</div>
+        <div id="velAxisLabel" style="font-family:'Share Tech Mono',monospace;font-size:0.7rem;color:var(--dim);"></div>
+      </div>
+      <canvas id="chartVel" height="160"></canvas>
+    </div>
+  </div>
+</main>
+
+<footer style="position:relative;z-index:1;text-align:center;padding:10px 28px 14px;font-size:0.65rem;color:var(--dim);border-top:1px solid var(--border);">
+  Physics Exam Lab - Doppler Cart &nbsp;|&nbsp;
+  Copyright &copy; 2026 一般社団法人 国際物理オリンピック2023記念協会 &nbsp;|&nbsp;
+  <a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank" rel="noopener"
+     style="color:var(--dim);text-decoration:underline;">CC BY-NC 4.0</a>
+</footer>
+
+<div class="modal-overlay" id="csvModal">
+  <div class="modal">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <h2 style="font-size:1rem; font-weight:600;">CSV Data</h2>
+      <button id="btnCloseModal" style="border:none; background:none; font-size:1.5rem; cursor:pointer; line-height:1;">✕</button>
+    </div>
+    <textarea class="csv-out" id="csvOutput" readonly></textarea>
+    <div class="modal-footer">
+      <span id="csvRowCount" style="font-size:0.75rem; color:var(--dim);"></span>
+      <div style="display:flex; gap:8px;">
+        <button class="btn-reset" id="btnCopy">Copy</button>
+        <button class="btn-csv"   id="btnDownload">Download</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════
+//  BLE UUIDs（PASCO Smart Cart）
+//  パターン: 4a5c000{s}-000{c}-0000-0000-5c1e741f1c00
+//  s=0-9, c=1-4 を全列挙して optionalServices に渡す
+// ═══════════════════════════════════════════════
+// 実機確認済みUUID（nRF Connect で検証）
+// Service:        4a5c000{s}-0000-0000-0000-5c1e741f1c00
+// Characteristic: 4a5c000{s}-000{c}-0000-0000-5c1e741f1c00
+const ALL_PASCO_UUIDS = [];
+for (let s = 0; s <= 9; s++) {
+  ALL_PASCO_UUIDS.push(`4a5c000${s}-0000-0000-0000-5c1e741f1c00`);
+  for (let c = 1; c <= 9; c++) {
+    ALL_PASCO_UUIDS.push(`4a5c000${s}-000${c}-0000-0000-5c1e741f1c00`);
+  }
+}
+const DEVICE_SERVICE       = '4a5c0000-0000-0000-0000-5c1e741f1c00';
+const DEVICE_CMD_CHAR      = '4a5c0000-0002-0000-0000-5c1e741f1c00'; // write command
+const POSITION_SERVICE     = '4a5c0003-0000-0000-0000-5c1e741f1c00';
+const POSITION_CMD_CHAR    = '4a5c0003-0002-0000-0000-5c1e741f1c00'; // writeWithoutResponse
+const POSITION_ACK_CHAR    = '4a5c0003-0005-0000-0000-5c1e741f1c00'; // ACK char
+
+// position = countAccumulated * 0.09895 / 816  [m]
+const POS_SCALE = 0.09895 / 816;
+
+// サンプリング間隔 [ms]
+const SAMPLE_INTERVAL_MS = 50;
+
+// グラフ表示点数
+const MAX_POINTS = 300;
+
+// ═══════════════════════════════════════════════
+//  状態変数
+// ═══════════════════════════════════════════════
+let bleDevice = null;
+let posCmdChar  = null;  // 4a5c0003-0002 writeWithoutResponse
+let posAckChar  = null;  // 4a5c0003-0005 ACK
+let isRecording = false;
+
+// BLE notify 側で更新する生カウント累積値
+let countAccumulated = 0;
+let lastPacketSeq = -1;           // byte[0] の連番（重複除去用）
+
+// 最新ポジション（notify コールバックから更新）
+let latestPosition = 0;           // [m]
+let notifyReceived = false;       // 最初のパケットを受け取ったか
+
+// 50ms サンプラが使う前回値
+let prevSamplePos = 0;
+let prevSampleTime = 0;           // performance.now() [ms]
+
+// グラフ・記録用配列
+let posValues  = [];
+let velValues  = [];
+let timeLabels = [];              // 経過秒数 [s]
+
+// CSV 用生データ
+let session = [];                 // { elapsed_s, position_m, velocity_ms }
+
+// タイマー ID
+let samplerTimerId = null;
+
+// 録画開始時刻（elapsed 計算用）
+let recordStartTime = 0;
+
+// ═══════════════════════════════════════════════
+//  BLE notify コールバック（生カウント累積）
+// ═══════════════════════════════════════════════
+let notifyPacketCount = 0;
+
+function handlePositionNotify(event) {
+  const data = event.target.value; // DataView
+  notifyPacketCount++;
+
+  // 生バイトをログ（最初の10パケットのみ）
+  if (notifyPacketCount <= 10) {
+    const bytes = Array.from(new Uint8Array(data.buffer))
+      .map(b => b.toString(16).padStart(2,'0')).join(' ');
+    log(`pkt#${notifyPacketCount} [${data.byteLength}B]: ${bytes}`);
+  }
+  if (notifyPacketCount === 11) log('(以降のパケットログは省略)');
+
+  let rawChange = null;
+
+  if (data.byteLength >= 5 &&
+      data.getUint8(0) === 0xC0 &&
+      data.getUint8(1) === 0x00 &&
+      data.getUint8(2) === 0x05) {
+    // ── One-shot レスポンス: [0xC0, 0x00, 0x05, lo, hi] ──
+    rawChange = data.getInt16(3, true);
+
+  } else if (data.byteLength >= 3 && data.getUint8(0) <= 0x1F) {
+    // ── 周期データ: [seqNum, lo, hi] ──
+    const seq = data.getUint8(0);
+    if (seq === lastPacketSeq) return;
+    lastPacketSeq = seq;
+    rawChange = data.getInt16(1, true);
+    // ACK を返す（8パケットごとでも毎回でも可）
+    if (posAckChar) {
+      posAckChar.writeValueWithoutResponse(new Uint8Array([seq])).catch(() => {});
+    }
+  }
+
+  if (rawChange !== null) {
+    countAccumulated += rawChange;
+    latestPosition = countAccumulated * POS_SCALE;
+    notifyReceived = true;
+  }
+}
+
+// ═══════════════════════════════════════════════
+//  50ms サンプラ
+// ═══════════════════════════════════════════════
+function sampleTick() {
+  if (!isRecording) return;
+  // one-shot リクエスト: [GCMD_READ_ONE_SAMPLE=0x05, DataSize=0x02]
+  if (posCmdChar) {
+    posCmdChar.writeValueWithoutResponse(new Uint8Array([0x05, 0x02])).catch(() => {});
+  }
+  if (!notifyReceived) return;
+
+  const now = performance.now();
+  const elapsed_s = (now - recordStartTime) / 1000;
+  const pos = latestPosition;
+
+  // 速度計算
+  let vel = 0;
+  if (prevSampleTime > 0) {
+    const dt = (now - prevSampleTime) / 1000; // [s]
+    if (dt > 0) vel = (pos - prevSamplePos) / dt;
+  }
+  prevSamplePos  = pos;
+  prevSampleTime = now;
+
+  // グラフ配列
+  posValues.push(pos);
+  velValues.push(vel);
+  timeLabels.push(elapsed_s);
+  session.push({ elapsed_s, position_m: pos, velocity_ms: vel });
+
+  if (posValues.length > MAX_POINTS) {
+    posValues.shift(); velValues.shift(); timeLabels.shift();
+  }
+
+  updateStats(pos, vel);
+  drawAllCharts();
+}
+
+// ═══════════════════════════════════════════════
+//  Canvas 描画
+// ═══════════════════════════════════════════════
+const ctxPos = document.getElementById('chartPos').getContext('2d');
+const ctxVel = document.getElementById('chartVel').getContext('2d');
+
+function drawChart(ctx, data, color, labelEl, unit) {
+  const W = ctx.canvas.width, H = ctx.canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#f8fbff';
+  ctx.fillRect(0, 0, W, H);
+
+  if (data.length < 2) return;
+
+  const PAD_L = 58, PAD_R = 12, PAD_T = 12, PAD_B = 28;
+  const plotW = W - PAD_L - PAD_R;
+  const plotH = H - PAD_T - PAD_B;
+
+  let min = Math.min(...data), max = Math.max(...data);
+  // 範囲が小さすぎる場合は ±0.1 広げる
+  if (Math.abs(max - min) < 0.001) { min -= 0.1; max += 0.1; }
+  const range = max - min;
+
+  const toY = v => PAD_T + plotH - ((v - min) / range) * plotH;
+  const toX = i => PAD_L + (i / (data.length - 1)) * plotW;
+
+  // グリッド（水平5本）
+  ctx.strokeStyle = 'rgba(160,185,210,0.5)';
+  ctx.lineWidth = 1;
+  for (let k = 0; k <= 4; k++) {
+    const y = PAD_T + (k / 4) * plotH;
+    ctx.beginPath(); ctx.moveTo(PAD_L, y); ctx.lineTo(PAD_L + plotW, y); ctx.stroke();
+    const val = max - (k / 4) * range;
+    ctx.fillStyle = '#6b8099';
+    ctx.font = '10px "Share Tech Mono", monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(val.toFixed(3), PAD_L - 6, y + 4);
+  }
+
+  // ゼロ線（速度グラフ用）
+  if (min < 0 && max > 0) {
+    const y0 = toY(0);
+    ctx.strokeStyle = 'rgba(100,120,140,0.7)';
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath(); ctx.moveTo(PAD_L, y0); ctx.lineTo(PAD_L + plotW, y0); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // データ線
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  for (let i = 0; i < data.length; i++) {
+    const x = toX(i), y = toY(data[i]);
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  // 最新値マーカー
+  const lastX = toX(data.length - 1), lastY = toY(data[data.length - 1]);
+  ctx.fillStyle = color;
+  ctx.beginPath(); ctx.arc(lastX, lastY, 4, 0, Math.PI * 2); ctx.fill();
+
+  // 軸ラベル（unit）
+  if (labelEl) {
+    labelEl.textContent = `min ${min.toFixed(3)} / max ${max.toFixed(3)} ${unit}`;
+  }
+}
+
+function drawAllCharts() {
+  drawChart(ctxPos, posValues, '#0077cc', document.getElementById('posAxisLabel'), 'm');
+  drawChart(ctxVel, velValues, '#4a8c00', document.getElementById('velAxisLabel'), 'm/s');
+}
+
+// ═══════════════════════════════════════════════
+//  統計表示
+// ═══════════════════════════════════════════════
+function updateStats(pos, vel) {
+  document.getElementById('sPosLast').textContent  = pos.toFixed(4) + ' m';
+  document.getElementById('sVelLast').textContent  = vel.toFixed(3) + ' m/s';
+  document.getElementById('sSampleCount').textContent = session.length;
+
+  const allPos = session.map(s => s.position_m);
+  const minP = Math.min(...allPos), maxP = Math.max(...allPos);
+  document.getElementById('sPosRange').textContent = minP.toFixed(3) + ' / ' + maxP.toFixed(3) + ' m';
+}
+
+// ═══════════════════════════════════════════════
+//  診断ログ
+// ═══════════════════════════════════════════════
+function log(msg) {
+  console.log(msg);
+  const el = document.getElementById('diagLog');
+  if (el) {
+    el.textContent += msg + '\n';
+    el.scrollTop = el.scrollHeight;
+  }
+}
+
+// ═══════════════════════════════════════════════
+//  BLE 接続
+// ═══════════════════════════════════════════════
+async function connectSmartCart() {
+  try {
+    document.getElementById('statusText').textContent = 'SCANNING...';
+    document.getElementById('diagLog').textContent = '';
+
+    log('Requesting device (namePrefix: "Smart Cart") …');
+    bleDevice = await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: 'Smart Cart' }],
+      optionalServices: ALL_PASCO_UUIDS
+    });
+
+    log(`Device: ${bleDevice.name}`);
+    bleDevice.addEventListener('gattserverdisconnected', onDisconnected);
+
+    log('Connecting GATT …');
+    const server = await bleDevice.gatt.connect();
+    log('GATT connected. Discovering primary services …');
+
+    // Position サービスに直接アクセス
+    log(`Getting position service: ${POSITION_SERVICE}`);
+    const posSvc = await server.getPrimaryService(POSITION_SERVICE);
+    log('Position service OK. Getting characteristics...');
+
+    const chars = await posSvc.getCharacteristics();
+    log(`${chars.length} characteristic(s):`);
+    for (const c of chars) {
+      const PROP_NAMES = ['broadcast','read','writeWithoutResponse','write','notify','indicate'];
+      const props = PROP_NAMES.filter(p => c.properties[p]);
+      log(`  ${c.uuid}  [${props.join(',') || 'none'}]`);
+    }
+
+    // ── デバイスサービスの cmd/recv char を取得 ──
+    log('Getting device service...');
+    const devSvc  = await server.getPrimaryService(DEVICE_SERVICE);
+    const devCmd  = await devSvc.getCharacteristic(DEVICE_CMD_CHAR);
+    const devRecv = await devSvc.getCharacteristic('4a5c0000-0003-0000-0000-5c1e741f1c00');
+    await devRecv.startNotifications();
+    devRecv.addEventListener('characteristicvaluechanged', (e) => {
+      const b = Array.from(new Uint8Array(e.target.value.buffer)).map(x=>x.toString(16).padStart(2,'0')).join(' ');
+      log(`[dev recv] ${b}`);
+      // Smart Cart は全レスポンスをデバイスサービス recv に返す
+      handlePositionNotify(e);
+    });
+    log('Device service ready.');
+
+    // ── Wireless RMS スタートコマンド [0x37, 0x01, 0x00] ──
+    await devCmd.writeValueWithoutResponse(new Uint8Array([0x37, 0x01, 0x00]));
+    log('Sent WIRELESS_RMS_START [37 01 00] to device cmd.');
+    await new Promise(r => setTimeout(r, 300));
+
+    // ── 0002: コマンド送信用 (writeWithoutResponse) ──
+    posCmdChar = await posSvc.getCharacteristic(POSITION_CMD_CHAR);
+    log('Position cmd char ready.');
+
+    // ── 0003: レスポンス受信 (write+notify+indicate) ──
+    const char0003 = await posSvc.getCharacteristic('4a5c0003-0003-0000-0000-5c1e741f1c00');
+    await char0003.startNotifications();
+    char0003.addEventListener('characteristicvaluechanged', (e) => {
+      const b = Array.from(new Uint8Array(e.target.value.buffer)).map(x=>x.toString(16).padStart(2,'0')).join(' ');
+      log(`[pos 0003] ${b}`);
+      handlePositionNotify(e);
+    });
+    log('Subscribed to pos 0003 (response channel).');
+
+    // ── 0005: ACK用 ──
+    posAckChar = await posSvc.getCharacteristic(POSITION_ACK_CHAR);
+    log('Position ACK char ready.');
+
+    // 接続直後に1回テストリクエストを送る
+    await posCmdChar.writeValueWithoutResponse(new Uint8Array([0x05, 0x02]));
+    log('Test request [05 02] sent → wait for [pos 0003] response...');
+
+    setConnected(true, bleDevice.name);
+    document.getElementById('btnStart').disabled = false;
+    document.getElementById('btnReset').disabled = false;
+
+  } catch (e) {
+    console.error(e);
+    log('ERROR: ' + e.message);
+    document.getElementById('statusText').textContent = 'ERROR: ' + e.message;
+  }
+}
+
+function onDisconnected() {
+  setConnected(false);
+  stopRecording();
+  document.getElementById('btnStart').disabled = true;
+}
+
+function setConnected(connected, name) {
+  const badge = document.getElementById('statusBadge');
+  badge.className = connected ? 'connected' : '';
+  document.getElementById('statusText').textContent = connected
+    ? ('CONNECTED: ' + (name || ''))
+    : 'DISCONNECTED';
+}
+
+// ═══════════════════════════════════════════════
+//  録画開始 / 停止
+// ═══════════════════════════════════════════════
+function startRecording() {
+  isRecording = true;
+  recordStartTime = performance.now();
+  prevSampleTime  = 0;
+  notifyReceived  = false;
+  samplerTimerId  = setInterval(sampleTick, SAMPLE_INTERVAL_MS);
+
+  document.getElementById('btnStart').disabled = true;
+  document.getElementById('btnStop').disabled  = false;
+}
+
+function stopRecording() {
+  isRecording = false;
+  if (samplerTimerId) { clearInterval(samplerTimerId); samplerTimerId = null; }
+  document.getElementById('btnStart').disabled = false;
+  document.getElementById('btnStop').disabled  = true;
+  if (session.length > 0) document.getElementById('btnCsv').disabled = false;
+}
+
+function resetAll() {
+  stopRecording();
+  countAccumulated = 0;
+  lastPacketSeq    = -1;
+  latestPosition   = 0;
+  notifyReceived   = false;
+  prevSamplePos    = 0;
+  prevSampleTime   = 0;
+  posValues  = []; velValues  = []; timeLabels = []; session = [];
+  document.getElementById('sPosLast').textContent    = '—';
+  document.getElementById('sVelLast').textContent    = '—';
+  document.getElementById('sPosRange').textContent   = '—';
+  document.getElementById('sSampleCount').textContent= '0';
+  document.getElementById('posAxisLabel').textContent= '';
+  document.getElementById('velAxisLabel').textContent= '';
+  document.getElementById('btnCsv').disabled = true;
+  drawAllCharts();
+}
+
+// ═══════════════════════════════════════════════
+//  CSV 出力
+// ═══════════════════════════════════════════════
+function buildCsv() {
+  let out = 'Elapsed(s),Position(m),Velocity(m/s)\n';
+  for (const r of session) {
+    out += `${r.elapsed_s.toFixed(4)},${r.position_m.toFixed(6)},${r.velocity_ms.toFixed(6)}\n`;
+  }
+  return out;
+}
+
+function showCsvModal() {
+  const csv = buildCsv();
+  document.getElementById('csvOutput').value = csv;
+  document.getElementById('csvRowCount').textContent = `${session.length} rows`;
+  document.getElementById('csvModal').classList.add('open');
+}
+
+// ═══════════════════════════════════════════════
+//  イベントリスナー
+// ═══════════════════════════════════════════════
+document.getElementById('btnConnect').addEventListener('click', connectSmartCart);
+document.getElementById('btnStart').addEventListener('click', startRecording);
+document.getElementById('btnStop').addEventListener('click',  stopRecording);
+document.getElementById('btnReset').addEventListener('click', resetAll);
+document.getElementById('btnCsv').addEventListener('click',   showCsvModal);
+
+document.getElementById('btnCloseModal').addEventListener('click', () => {
+  document.getElementById('csvModal').classList.remove('open');
+});
+
+document.getElementById('btnCopy').addEventListener('click', () => {
+  const ta = document.getElementById('csvOutput');
+  ta.select();
+  navigator.clipboard.writeText(ta.value).catch(() => document.execCommand('copy'));
+});
+
+document.getElementById('btnDownload').addEventListener('click', () => {
+  const blob = new Blob([buildCsv()], { type: 'text/csv' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = `smartcart_${new Date().toISOString().replace(/[:.]/g,'-')}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+// ─── Canvas リサイズ ───────────────────────────
+function resizeCanvases() {
+  for (const canvas of [ctxPos.canvas, ctxVel.canvas]) {
+    canvas.width = canvas.parentElement.clientWidth - 36;
+  }
+  drawAllCharts();
+}
+window.addEventListener('resize', resizeCanvases);
+resizeCanvases();
+</script>
+</body>
+</html>
