@@ -286,6 +286,7 @@ let freqDevice      = null;
 let freqChar        = null;
 let isFreqConnected = false;
 let prevFreqEspTime = -1;   // gap 検出用（ESP32 内部時刻 [s]）
+let firstFreqEspTime = -1;  // elapsed_s 計算基準（ESP32 内部時刻 [s]）
 
 // ═══════════════════════════════════════════════
 //  録画状態
@@ -357,10 +358,13 @@ function onFreqNotify(event) {
   const t_esp_s = parseFloat(parts[0]);
   const freq_hz = parseFloat(parts[1]);
 
-  // ブラウザ受信時刻からサンプリング窓中央時刻を推定
+  // ESP32 内部時刻を elapsed_s の基準に使う（BLEジッター排除）
+  if (firstFreqEspTime < 0) firstFreqEspTime = t_esp_s;
+  const elapsed_s = t_esp_s - firstFreqEspTime;
+
+  // 位置補間用のブラウザ時刻（補間はブラウザ時刻で行う）
   const t_recv_ms = performance.now();
   const t_true_ms = t_recv_ms - SAMPLING_TAIL_MS;
-  const elapsed_s = (t_true_ms - recordStartTime) / 1000;
 
   // パケットギャップ検出（ESP32 内部時刻の差分）
   let gap_ok = true;
@@ -652,8 +656,9 @@ function startRecording() {
   recordStartTime = performance.now();
   prevSampleTime  = 0;
   notifyReceived  = false;
-  prevFreqEspTime = -1;
-  samplerTimerId  = setInterval(sampleTick, SAMPLE_INTERVAL_MS);
+  prevFreqEspTime  = -1;
+  firstFreqEspTime = -1;
+  samplerTimerId   = setInterval(sampleTick, SAMPLE_INTERVAL_MS);
   updateButtonStates();
 }
 
@@ -670,7 +675,8 @@ function resetAll() {
   countAccumulated = 0; lastPacketSeq = -1;
   latestPosition = 0; notifyReceived = false;
   prevSamplePos = 0; prevSampleTime = 0; notifyPacketCount = 0;
-  prevFreqEspTime = -1;
+  prevFreqEspTime  = -1;
+  firstFreqEspTime = -1;
   posSession = []; freqSession = [];
   posValues = []; velValues = []; freqValues = [];
   ['sPosLast','sVelLast','sFreqLast','sFreqRange'].forEach(id => {
