@@ -344,13 +344,19 @@ function handlePositionNotify(event) {
     countAccumulated += rawChange;
     const newPos = countAccumulated * POS_SCALE;
 
-    // notify 到着時刻ベースで速度を計算（sampleTick のタイミングに依存しない）
+    // notify 到着時刻ベースで速度を計算
+    // dt < 20ms の場合は devRecv/char0003 の二重発火とみなし速度を更新しない
     if (lastNotifyTime > 0) {
       const dt = (now - lastNotifyTime) / 1000;
-      if (dt > 0) latestVelocity = (newPos - lastNotifyPos) / dt;
+      if (dt >= 0.020) {
+        latestVelocity = (newPos - lastNotifyPos) / dt;
+        lastNotifyTime = now;
+        lastNotifyPos  = newPos;
+      }
+    } else {
+      lastNotifyTime = now;
+      lastNotifyPos  = newPos;
     }
-    lastNotifyTime = now;
-    lastNotifyPos  = newPos;
     latestPosition = newPos;
     notifyReceived = true;
   }
