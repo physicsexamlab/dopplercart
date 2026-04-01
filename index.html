@@ -161,6 +161,11 @@
     </div>
   </div>
 
+  <details id="diagDetails" style="background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:8px 14px;">
+    <summary style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.1em;color:var(--dim);cursor:pointer;">Diagnostic Log</summary>
+    <pre id="diagLog" style="font-family:'Share Tech Mono',monospace;font-size:0.72rem;color:var(--text);margin-top:8px;max-height:180px;overflow-y:auto;white-space:pre-wrap;"></pre>
+  </details>
+
   <div style="display:flex; flex-direction:column; gap:16px;">
     <div class="chart-panel pos">
       <div class="chart-header">
@@ -199,9 +204,18 @@
 <script>
 // ═══════════════════════════════════════════════
 //  BLE UUIDs（PASCO Smart Cart）
+//  パターン: 4a5c000{s}-000{c}-0000-0000-5c1e741f1c00
+//  s=0-9, c=1-4 を全列挙して optionalServices に渡す
 // ═══════════════════════════════════════════════
-const DEVICE_SERVICE_CMD  = '4a5c0000-0002-0000-0000-5c1e741f1c00';
-const POSITION_SERVICE    = '4a5c0003-0002-0000-0000-5c1e741f1c00';
+const PASCO_BASE = '5c1e741f1c00';
+const ALL_PASCO_UUIDS = [];
+for (let s = 0; s <= 9; s++) {
+  for (let c = 1; c <= 4; c++) {
+    ALL_PASCO_UUIDS.push(`4a5c000${s}-000${c}-0000-0000-${PASCO_BASE}`);
+  }
+}
+// ハンドオフ文書に記載の期待UUID（デバッグ参照用）
+const POSITION_SERVICE_EXPECTED = '4a5c0003-0002-0000-0000-5c1e741f1c00';
 
 // position = countAccumulated * 0.09895 / 816  [m]
 const POS_SCALE = 0.09895 / 816;
@@ -383,43 +397,80 @@ function updateStats(pos, vel) {
 }
 
 // ═══════════════════════════════════════════════
+//  診断ログ
+// ═══════════════════════════════════════════════
+function log(msg) {
+  console.log(msg);
+  const el = document.getElementById('diagLog');
+  if (el) {
+    el.textContent += msg + '\n';
+    el.scrollTop = el.scrollHeight;
+  }
+}
+
+// ═══════════════════════════════════════════════
 //  BLE 接続
 // ═══════════════════════════════════════════════
 async function connectSmartCart() {
   try {
     document.getElementById('statusText').textContent = 'SCANNING...';
+    document.getElementById('diagLog').textContent = '';
 
+    log('Requesting device (namePrefix: "Smart Cart") …');
     bleDevice = await navigator.bluetooth.requestDevice({
       filters: [{ namePrefix: 'Smart Cart' }],
-      optionalServices: [
-        DEVICE_SERVICE_CMD,
-        POSITION_SERVICE,
-      ]
+      optionalServices: ALL_PASCO_UUIDS
     });
 
+    log(`Device: ${bleDevice.name}`);
     bleDevice.addEventListener('gattserverdisconnected', onDisconnected);
 
-    const server  = await bleDevice.gatt.connect();
-    const service = await server.getPrimaryService(POSITION_SERVICE);
-    const chars   = await service.getCharacteristics();
+    log('Connecting GATT …');
+    const server = await bleDevice.gatt.connect();
+    log('GATT connected. Discovering primary services …');
 
+    const services = await server.getPrimaryServices();
+    log(`Found ${services.length} primary service(s):`);
+    for (const svc of services) log('  svc: ' + svc.uuid);
+
+    // notify 可能な Characteristic を全サービスから探索
     let notifyChar = null;
-    for (const c of chars) {
-      if (c.properties.notify) { notifyChar = c; break; }
+    let foundSvcUuid = null;
+
+    for (const svc of services) {
+      let chars;
+      try { chars = await svc.getCharacteristics(); }
+      catch (e) { log(`  getCharacteristics failed for ${svc.uuid}: ${e.message}`); continue; }
+
+      for (const c of chars) {
+        const props = Object.keys(c.properties).filter(k => c.properties[k]).join(',');
+        log(`    char: ${c.uuid}  [${props}]`);
+        if (c.properties.notify && !notifyChar) {
+          notifyChar = c;
+          foundSvcUuid = svc.uuid;
+        }
+      }
     }
 
-    if (!notifyChar) throw new Error('Notify characteristic not found');
+    if (!notifyChar) throw new Error('Notify characteristic が見つかりませんでした。上の診断ログを確認してください。');
+
+    log(`\nUsing notify char: ${notifyChar.uuid}`);
+    log(`in service:        ${foundSvcUuid}`);
+    if (foundSvcUuid !== POSITION_SERVICE_EXPECTED) {
+      log(`(期待UUID ${POSITION_SERVICE_EXPECTED} と異なります → ハンドオフ文書の更新が必要かもしれません)`);
+    }
 
     await notifyChar.startNotifications();
     notifyChar.addEventListener('characteristicvaluechanged', handlePositionNotify);
+    log('Notifications started.');
 
-    // UI 更新
     setConnected(true, bleDevice.name);
     document.getElementById('btnStart').disabled = false;
     document.getElementById('btnReset').disabled = false;
 
   } catch (e) {
     console.error(e);
+    log('ERROR: ' + e.message);
     document.getElementById('statusText').textContent = 'ERROR: ' + e.message;
   }
 }
