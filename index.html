@@ -207,15 +207,13 @@
 //  パターン: 4a5c000{s}-000{c}-0000-0000-5c1e741f1c00
 //  s=0-9, c=1-4 を全列挙して optionalServices に渡す
 // ═══════════════════════════════════════════════
-const PASCO_BASE = '5c1e741f1c00';
+// 実機確認済みUUID（nRF Connect で検証）
+// 正しいパターン: 4a5c000{X}-0000-0000-0000-5c1e741f1c00
 const ALL_PASCO_UUIDS = [];
 for (let s = 0; s <= 9; s++) {
-  for (let c = 1; c <= 4; c++) {
-    ALL_PASCO_UUIDS.push(`4a5c000${s}-000${c}-0000-0000-${PASCO_BASE}`);
-  }
+  ALL_PASCO_UUIDS.push(`4a5c000${s}-0000-0000-0000-5c1e741f1c00`);
 }
-// ハンドオフ文書に記載の期待UUID（デバッグ参照用）
-const POSITION_SERVICE_EXPECTED = '4a5c0003-0002-0000-0000-5c1e741f1c00';
+const POSITION_SERVICE_EXPECTED = '4a5c0003-0000-0000-0000-5c1e741f1c00';
 
 // position = countAccumulated * 0.09895 / 816  [m]
 const POS_SCALE = 0.09895 / 816;
