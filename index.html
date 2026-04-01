@@ -458,18 +458,37 @@ async function connectSmartCart() {
       log(`  ${c.uuid}  [${props.join(',') || 'none'}]`);
     }
 
-    // 0002（writeWithoutResponse）に有効化コマンドを送る
-    log(`\nSending enable command to ${POSITION_CMD_CHAR} ...`);
-    const cmdChar = await posSvc.getCharacteristic(POSITION_CMD_CHAR);
-    await cmdChar.writeValueWithoutResponse(new Uint8Array([0x01]));
-    log('Enable command sent.');
+    // ── 0003（write+notify+indicate）にサブスクライブ ──
+    const char0003 = await posSvc.getCharacteristic('4a5c0003-0003-0000-0000-5c1e741f1c00');
+    await char0003.startNotifications();
+    char0003.addEventListener('characteristicvaluechanged', (e) => {
+      const b = Array.from(new Uint8Array(e.target.value.buffer)).map(x=>x.toString(16).padStart(2,'0')).join(' ');
+      log(`[0003 notify] ${b}`);
+    });
+    log('Subscribed to 0003.');
 
-    // 0004（read,notify）をサブスクライブ
-    log(`Subscribing to ${POSITION_NOTIFY_CHAR} ...`);
-    const notifyChar = await posSvc.getCharacteristic(POSITION_NOTIFY_CHAR);
-    await notifyChar.startNotifications();
-    notifyChar.addEventListener('characteristicvaluechanged', handlePositionNotify);
-    log('Notifications started on position char.');
+    // ── 0004（read+notify）を直接 read して現在値確認 ──
+    const char0004 = await posSvc.getCharacteristic('4a5c0003-0004-0000-0000-5c1e741f1c00');
+    try {
+      const val = await char0004.readValue();
+      const b = Array.from(new Uint8Array(val.buffer)).map(x=>x.toString(16).padStart(2,'0')).join(' ');
+      log(`[0004 read]   ${b}`);
+    } catch(e) { log(`[0004 read]   error: ${e.message}`); }
+
+    // ── 0004 notify サブスクライブ（実データ用）──
+    await char0004.startNotifications();
+    char0004.addEventListener('characteristicvaluechanged', handlePositionNotify);
+    log('Subscribed to 0004 notify (position data).');
+
+    // ── 0002 に各種コマンドを試す ──
+    const cmdChar = await posSvc.getCharacteristic(POSITION_CMD_CHAR);
+    for (const cmd of [[0x01],[0x00,0x01],[0x01,0x00],[0x03],[0x53,0x01]]) {
+      try {
+        await cmdChar.writeValueWithoutResponse(new Uint8Array(cmd));
+        log(`Sent cmd [${cmd.map(x=>x.toString(16)).join(' ')}] to 0002`);
+        await new Promise(r => setTimeout(r, 200));
+      } catch(e) { log(`cmd error: ${e.message}`); }
+    }
 
     setConnected(true, bleDevice.name);
     document.getElementById('btnStart').disabled = false;
