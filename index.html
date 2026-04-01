@@ -236,7 +236,8 @@ const MAX_POINTS = 300;
 //  状態変数
 // ═══════════════════════════════════════════════
 let bleDevice = null;
-let posAckChar = null;
+let posCmdChar  = null;  // 4a5c0003-0002 writeWithoutResponse
+let posAckChar  = null;  // 4a5c0003-0005 ACK
 let isRecording = false;
 
 // BLE notify 側で更新する生カウント累積値
@@ -282,30 +283,44 @@ function handlePositionNotify(event) {
   }
   if (notifyPacketCount === 11) log('(以降のパケットログは省略)');
 
-  // data[0] <= 0x1F → 周期データパケット → ACK を返す
-  if (data.byteLength >= 1 && data.getUint8(0) <= 0x1F && posAckChar) {
-    posAckChar.writeValueWithoutResponse(new Uint8Array([data.getUint8(0)]))
-      .catch(() => {});
+  let rawChange = null;
+
+  if (data.byteLength >= 5 &&
+      data.getUint8(0) === 0xC0 &&
+      data.getUint8(1) === 0x00 &&
+      data.getUint8(2) === 0x05) {
+    // ── One-shot レスポンス: [0xC0, 0x00, 0x05, lo, hi] ──
+    rawChange = data.getInt16(3, true);
+
+  } else if (data.byteLength >= 3 && data.getUint8(0) <= 0x1F) {
+    // ── 周期データ: [seqNum, lo, hi] ──
+    const seq = data.getUint8(0);
+    if (seq === lastPacketSeq) return;
+    lastPacketSeq = seq;
+    rawChange = data.getInt16(1, true);
+    // ACK を返す（8パケットごとでも毎回でも可）
+    if (posAckChar) {
+      posAckChar.writeValueWithoutResponse(new Uint8Array([seq])).catch(() => {});
+    }
   }
 
-  if (data.byteLength < 3) return;
-
-  const seq = data.getUint8(0);
-  // 同じパケット番号は無視（Smart Cart は 0x00〜0x1F で循環）
-  if (seq === lastPacketSeq) return;
-  lastPacketSeq = seq;
-
-  const rawChange = data.getInt16(1, true); // リトルエンディアン signed int16
-  countAccumulated += rawChange;
-  latestPosition = countAccumulated * POS_SCALE;
-  notifyReceived = true;
+  if (rawChange !== null) {
+    countAccumulated += rawChange;
+    latestPosition = countAccumulated * POS_SCALE;
+    notifyReceived = true;
+  }
 }
 
 // ═══════════════════════════════════════════════
 //  50ms サンプラ
 // ═══════════════════════════════════════════════
 function sampleTick() {
-  if (!isRecording || !notifyReceived) return;
+  if (!isRecording) return;
+  // one-shot リクエスト: [GCMD_READ_ONE_SAMPLE=0x05, DataSize=0x02]
+  if (posCmdChar) {
+    posCmdChar.writeValueWithoutResponse(new Uint8Array([0x05, 0x02])).catch(() => {});
+  }
+  if (!notifyReceived) return;
 
   const now = performance.now();
   const elapsed_s = (now - recordStartTime) / 1000;
@@ -484,7 +499,11 @@ async function connectSmartCart() {
     log('Sent WIRELESS_RMS_START [37 01 00] to device cmd.');
     await new Promise(r => setTimeout(r, 300));
 
-    // ── Position サービスの 0003, 0004 両方サブスクライブ ──
+    // ── 0002: コマンド送信用 (writeWithoutResponse) ──
+    posCmdChar = await posSvc.getCharacteristic(POSITION_CMD_CHAR);
+    log('Position cmd char ready.');
+
+    // ── 0003: レスポンス受信 (write+notify+indicate) ──
     const char0003 = await posSvc.getCharacteristic('4a5c0003-0003-0000-0000-5c1e741f1c00');
     await char0003.startNotifications();
     char0003.addEventListener('characteristicvaluechanged', (e) => {
@@ -492,20 +511,15 @@ async function connectSmartCart() {
       log(`[pos 0003] ${b}`);
       handlePositionNotify(e);
     });
-    log('Subscribed to pos 0003.');
+    log('Subscribed to pos 0003 (response channel).');
 
-    const char0004 = await posSvc.getCharacteristic('4a5c0003-0004-0000-0000-5c1e741f1c00');
-    await char0004.startNotifications();
-    char0004.addEventListener('characteristicvaluechanged', (e) => {
-      const b = Array.from(new Uint8Array(e.target.value.buffer)).map(x=>x.toString(16).padStart(2,'0')).join(' ');
-      log(`[pos 0004] ${b}`);
-      handlePositionNotify(e);
-    });
-    log('Subscribed to pos 0004.');
-
-    // ACK char を保持（handlePositionNotify から使う）
+    // ── 0005: ACK用 ──
     posAckChar = await posSvc.getCharacteristic(POSITION_ACK_CHAR);
     log('Position ACK char ready.');
+
+    // 接続直後に1回テストリクエストを送る
+    await posCmdChar.writeValueWithoutResponse(new Uint8Array([0x05, 0x02]));
+    log('Test request [05 02] sent → wait for [pos 0003] response...');
 
     setConnected(true, bleDevice.name);
     document.getElementById('btnStart').disabled = false;
