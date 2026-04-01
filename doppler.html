@@ -736,17 +736,33 @@ function interpolatePos(t_ms) {
 function buildCsv() {
   if (freqSession.length > 0) {
     let out = 'elapsed_s,pos_m,vel_ms,freq_hz,gap_ok\n';
+    // pos を先に全行補間
+    const posMerged = freqSession.map(f => {
+      const p = interpolatePos(f.t_true_ms);
+      return p ? p.pos_m : null;
+    });
+
+    let prevVel = 0;
     for (let i = 0; i < freqSession.length; i++) {
-      const f      = freqSession[i];
-      // pos_m と vel_ms はどちらも posSession を補間して取得
-      // vel_ms は notify 到着時刻ベースで計算済みのものを補間するため
-      // Δpos=0 によるゼロ dip が発生しない
-      const p      = interpolatePos(f.t_true_ms);
-      const pos_m  = p ? p.pos_m  : null;
-      const vel_ms = p ? p.vel_ms : null;
+      const f     = freqSession[i];
+      const pos_m = posMerged[i];
+
+      // vel = Δpos / Δt（隣接行の補間済み位置差分）→ pos と数値的に一致
+      // Δpos ≈ 0（notify未到着で同値）の場合は前行の vel を引き継ぎ dip を防ぐ
+      let vel_ms = prevVel;
+      if (i > 0 && pos_m !== null && posMerged[i - 1] !== null) {
+        const dpos = pos_m - posMerged[i - 1];
+        const dt   = freqSession[i].elapsed_s - freqSession[i - 1].elapsed_s;
+        if (Math.abs(dpos) > 1e-6 && dt > 0) {
+          vel_ms = dpos / dt;
+        }
+      } else if (i === 0) {
+        vel_ms = 0;
+      }
+      prevVel = vel_ms;
 
       const pos_str = pos_m  !== null ? pos_m.toFixed(6)  : '';
-      const vel_str = vel_ms !== null ? vel_ms.toFixed(6) : '';
+      const vel_str = vel_ms.toFixed(6);
       out += `${f.elapsed_s.toFixed(4)},${pos_str},${vel_str},${f.freq_hz.toFixed(2)},${f.gap_ok}\n`;
     }
     return out;
