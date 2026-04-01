@@ -274,9 +274,10 @@ let isCartConnected  = false;
 let countAccumulated  = 0;
 let lastPacketSeq     = -1;
 let latestPosition    = 0;
+let latestVelocity    = 0;
 let notifyReceived    = false;
-let prevSamplePos     = 0;
-let prevSampleTime    = 0;
+let lastNotifyTime    = 0;   // notify 到着時刻 [ms]
+let lastNotifyPos     = 0;   // notify 到着時の位置 [m]
 let notifyPacketCount = 0;
 
 // ═══════════════════════════════════════════════
@@ -339,9 +340,19 @@ function handlePositionNotify(event) {
   }
 
   if (rawChange !== null) {
+    const now   = performance.now();
     countAccumulated += rawChange;
-    latestPosition    = countAccumulated * POS_SCALE;
-    notifyReceived    = true;
+    const newPos = countAccumulated * POS_SCALE;
+
+    // notify 到着時刻ベースで速度を計算（sampleTick のタイミングに依存しない）
+    if (lastNotifyTime > 0) {
+      const dt = (now - lastNotifyTime) / 1000;
+      if (dt > 0) latestVelocity = (newPos - lastNotifyPos) / dt;
+    }
+    lastNotifyTime = now;
+    lastNotifyPos  = newPos;
+    latestPosition = newPos;
+    notifyReceived = true;
   }
 }
 
@@ -404,14 +415,7 @@ function sampleTick() {
   const now       = performance.now();
   const elapsed_s = (now - recordStartTime) / 1000;
   const pos       = latestPosition;
-
-  let vel = 0;
-  if (prevSampleTime > 0) {
-    const dt = (now - prevSampleTime) / 1000;
-    if (dt > 0) vel = (pos - prevSamplePos) / dt;
-  }
-  prevSamplePos  = pos;
-  prevSampleTime = now;
+  const vel       = latestVelocity;   // notify 到着時刻ベースで計算済み
 
   posSession.push({ t_ms: now, elapsed_s, pos_m: pos, vel_ms: vel });
 
@@ -654,8 +658,10 @@ function updateButtonStates() {
 function startRecording() {
   isRecording     = true;
   recordStartTime = performance.now();
-  prevSampleTime  = 0;
   notifyReceived  = false;
+  latestVelocity  = 0;
+  lastNotifyTime  = 0;
+  lastNotifyPos   = 0;
   prevFreqEspTime  = -1;
   firstFreqEspTime = -1;
   samplerTimerId   = setInterval(sampleTick, SAMPLE_INTERVAL_MS);
@@ -674,7 +680,7 @@ function resetAll() {
   stopRecording();
   countAccumulated = 0; lastPacketSeq = -1;
   latestPosition = 0; notifyReceived = false;
-  prevSamplePos = 0; prevSampleTime = 0; notifyPacketCount = 0;
+  latestVelocity = 0; lastNotifyTime = 0; lastNotifyPos = 0; notifyPacketCount = 0;
   prevFreqEspTime  = -1;
   firstFreqEspTime = -1;
   posSession = []; freqSession = [];
