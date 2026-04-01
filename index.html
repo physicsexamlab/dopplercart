@@ -491,6 +491,8 @@ async function connectSmartCart() {
     devRecv.addEventListener('characteristicvaluechanged', (e) => {
       const b = Array.from(new Uint8Array(e.target.value.buffer)).map(x=>x.toString(16).padStart(2,'0')).join(' ');
       log(`[dev recv] ${b}`);
+      // Smart Cart は全レスポンスをデバイスサービス recv に返す
+      handlePositionNotify(e);
     });
     log('Device service ready.');
 
