@@ -372,8 +372,9 @@ function onFreqNotify(event) {
   const parts = raw.split(',');
   if (parts.length < 2) return;
 
-  const t_esp_s = parseFloat(parts[0]);
-  const freq_hz = parseFloat(parts[1]);
+  const t_esp_s   = parseFloat(parts[0]);
+  const freq_hz   = parseFloat(parts[1]);
+  const amplitude = parts.length >= 3 ? parseFloat(parts[2]) : null;
 
   // ESP32 内部時刻を elapsed_s の基準に使う（BLEジッター排除）
   if (firstFreqEspTime < 0) firstFreqEspTime = t_esp_s;
@@ -394,7 +395,7 @@ function onFreqNotify(event) {
   }
   prevFreqEspTime = t_esp_s;
 
-  freqSession.push({ t_true_ms, elapsed_s, freq_hz, gap_ok });
+  freqSession.push({ t_true_ms, elapsed_s, freq_hz, gap_ok, amplitude });
 
   // 表示用（品質不足 freq < 0 は除外）
   if (freq_hz > 0) {
@@ -735,35 +736,35 @@ function interpolatePos(t_ms) {
 // ═══════════════════════════════════════════════
 function buildCsv() {
   if (freqSession.length > 0) {
-    let out = 'elapsed_s,pos_m,vel_ms,freq_hz,gap_ok\n';
-    // pos を先に全行補間
+    let out = 'elapsed_s,pos_m,vel_ms,freq_hz,amplitude,gap_ok\n';
+    const n = freqSession.length;
+    // pos を先に全行補間（pos_m 列用）
     const posMerged = freqSession.map(f => {
       const p = interpolatePos(f.t_true_ms);
       return p ? p.pos_m : null;
     });
 
-    let prevVel = 0;
-    for (let i = 0; i < freqSession.length; i++) {
+    // vel: ±HALF_WIN 点の中央差分（notify ジッタをならす）
+    // 端点は使えるレンジで自動縮退する
+    const HALF_WIN = 3;
+    for (let i = 0; i < n; i++) {
       const f     = freqSession[i];
       const pos_m = posMerged[i];
 
-      // vel = Δpos / Δt（隣接行の補間済み位置差分）→ pos と数値的に一致
-      // Δpos ≈ 0（notify未到着で同値）の場合は前行の vel を引き継ぎ dip を防ぐ
-      let vel_ms = prevVel;
-      if (i > 0 && pos_m !== null && posMerged[i - 1] !== null) {
-        const dpos = pos_m - posMerged[i - 1];
-        const dt   = freqSession[i].elapsed_s - freqSession[i - 1].elapsed_s;
-        if (Math.abs(dpos) > 1e-6 && dt > 0) {
-          vel_ms = dpos / dt;
-        }
-      } else if (i === 0) {
-        vel_ms = 0;
+      const lo  = Math.max(0, i - HALF_WIN);
+      const hi  = Math.min(n - 1, i + HALF_WIN);
+      const pLo = interpolatePos(freqSession[lo].t_true_ms);
+      const pHi = interpolatePos(freqSession[hi].t_true_ms);
+      let vel_ms = 0;
+      if (pLo && pHi) {
+        const dt = freqSession[hi].elapsed_s - freqSession[lo].elapsed_s;
+        if (dt > 0) vel_ms = (pHi.pos_m - pLo.pos_m) / dt;
       }
-      prevVel = vel_ms;
 
-      const pos_str = pos_m  !== null ? pos_m.toFixed(6)  : '';
-      const vel_str = vel_ms.toFixed(6);
-      out += `${f.elapsed_s.toFixed(4)},${pos_str},${vel_str},${f.freq_hz.toFixed(2)},${f.gap_ok}\n`;
+      const pos_str = pos_m !== null ? pos_m.toFixed(6) : '';
+      const amp_str = (f.amplitude !== null && f.amplitude !== undefined)
+                      ? f.amplitude.toFixed(4) : '';
+      out += `${f.elapsed_s.toFixed(4)},${pos_str},${vel_ms.toFixed(6)},${f.freq_hz.toFixed(2)},${amp_str},${f.gap_ok}\n`;
     }
     return out;
   }
