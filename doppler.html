@@ -257,11 +257,12 @@ const MAX_POINTS         = 300;
 
 // ESP32 タイムスタンプ補正:
 //   BLE notify 受信時刻 − SAMPLING_TAIL_MS ≈ サンプリング窓中央（tFreq）
-//   残りサンプリング(≈25ms) + Goertzel(≈2ms) + BLE転送(≈10ms) ≈ 37ms
-const SAMPLING_TAIL_MS      = 37;
+//   N=800:  窓後半(≈28ms) + Goertzel+BLE(≈12ms) ≈ 37ms  [旧]
+//   N=1600: 窓後半(≈55ms) + Goertzel+BLE(≈12ms) ≈ 67ms  [現在]
+const SAMPLING_TAIL_MS      = 67;
 
-// 50ms インターバルで 180ms 超のギャップ = 2 パケット以上欠落
-const FREQ_GAP_THRESHOLD_MS = 180;
+// 120ms インターバルで 360ms 超のギャップ = 3 パケット以上欠落
+const FREQ_GAP_THRESHOLD_MS = 360;
 
 // ═══════════════════════════════════════════════
 //  Smart Cart 状態
