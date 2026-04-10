@@ -747,7 +747,7 @@ function buildCsv() {
 
     // vel: ±HALF_WIN 点の中央差分（notify ジッタをならす）
     // 端点は使えるレンジで自動縮退する
-    const HALF_WIN = 3;
+    const HALF_WIN = 1;
     for (let i = 0; i < n; i++) {
       const f     = freqSession[i];
       const pos_m = posMerged[i];
