@@ -1,20 +1,21 @@
 /*
-  doppler-cart.ino  (v4 — NimBLE + analogRead)
+  doppler-cart.ino  (v5 — MAX9814 マイクアンプ対応)
   ESP32 (Arduino Nano ESP32) Goertzel 周波数センサ
 
-  【旧コードからの変更点】
-    - HC-SR04 距離センサを削除（周波数のみ）
-    - 出力フォーマット: "t_esp_s,freq_hz,amplitude"
-    - 周波数範囲: 960〜1040 Hz（旧: 900〜1100 Hz）
-    - amplitude = Goertzel ピーク magnitude / (N/2) [ADC counts 相当]
-    - pp < MIN_PP でも amplitude は常に出力（SNR 診断用）
+  【v5 変更点】
+    - MAX9814 マイクアンプモジュール対応
+        VDD→3.3V / GND→GND / OUT→A0
+        GAIN→VDD(3.3V) で 60dB 固定 / GAIN→open で 40dB
+    - AMPLITUDE_MIN を追加: pp≥MIN_PP でも音源なし時に freq が出る問題を解消
+      MAX9814 接続後の実測 amplitude を見て値を調整すること
+    - Serial 出力を有効化（接続確認・キャリブレーション用）
 
   【旧コードから継承（動作実績あり）】
     NimBLE-Arduino / analogRead 高速ループ / 実測 fs / Hanning 窓 / 放物線補間
 
   出力フォーマット (BLE notify / Serial):
     "t_esp_s,freq_hz,amplitude"
-    freq_hz < 0 は品質不足 (pp < MIN_PP)
+    freq_hz < 0 は品質不足 (pp < MIN_PP または amplitude < AMPLITUDE_MIN)
     amplitude = mag_peak / (N/2) ≈ ADC ピーク振幅 [counts]（Hanning 窓係数 0.5 分を含む）
 
   BLE:
@@ -31,7 +32,9 @@
 // ─── ユーザ設定 ───────────────────────────────────────
 #define MIC_PIN    A0       // アナログ入力（Arduino Nano ESP32）
 #define N          1600     // サンプル数（≈110ms @ ~14.5kHz）
-#define MIN_PP     200      // 品質閾値: peak-to-peak [ADC counts] — 要調整
+#define MIN_PP          200      // 品質閾値: peak-to-peak [ADC counts]
+#define AMPLITUDE_MIN   30.0f    // Goertzel amplitude 閾値 [counts] — MAX9814 接続後に要較正
+                                 // 音源 OFF 時の amplitude を確認し、その 5〜10 倍に設定する
 #define FREQ_LOW   960.0f
 #define FREQ_HIGH  1040.0f
 #define FREQ_STEP  1.0f     // Goertzel 評価間隔 [Hz]
@@ -139,9 +142,9 @@ void loop() {
   // 真の ADC ピーク振幅は amplitude * 2 に相当する
   const float amplitude = mag[bestB] / (N / 2.0f);
 
-  // ── 5. 周波数推定（pp が閾値以上のときのみ）──────
+  // ── 5. 周波数推定（pp と amplitude が両方閾値以上のときのみ）──
   float freq_hz = -1.0f;
-  if (pp >= MIN_PP) {
+  if (pp >= MIN_PP && amplitude >= AMPLITUDE_MIN) {
     float delta = 0.0f;
     if (bestB > 0 && bestB < N_BINS - 1) {
       const float y1  = mag[bestB - 1];
