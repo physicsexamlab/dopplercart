@@ -5,7 +5,7 @@
   【v5 変更点】
     - MAX9814 マイクアンプモジュール対応
         VDD→3.3V / GND→GND / OUT→A0
-        GAIN→VDD(3.3V) で 60dB 固定 / GAIN→open で 40dB
+        GAIN→open で 60dB（最大） / GAIN→GND で 50dB / GAIN→VDD で 40dB
     - AMPLITUDE_MIN を追加: pp≥MIN_PP でも音源なし時に freq が出る問題を解消
       MAX9814 接続後の実測 amplitude を見て値を調整すること
     - Serial 出力を有効化（接続確認・キャリブレーション用）
