@@ -33,8 +33,9 @@
 #define MIC_PIN    A0       // アナログ入力（Arduino Nano ESP32）
 #define N          1600     // サンプル数（≈110ms @ ~14.5kHz）
 #define MIN_PP          200      // 品質閾値: peak-to-peak [ADC counts]
-#define AMPLITUDE_MIN   30.0f    // Goertzel amplitude 閾値 [counts] — MAX9814 接続後に要較正
-                                 // 音源 OFF 時の amplitude を確認し、その 5〜10 倍に設定する
+#define AMPLITUDE_MIN   50.0f    // Goertzel amplitude 閾値 [counts]
+                                 // ノイズフロア(MAX9814 60dB): ≈2〜28 counts
+                                 // 音源あり: ≈460〜610 counts → 余裕十分
 #define FREQ_LOW   960.0f
 #define FREQ_HIGH  1040.0f
 #define FREQ_STEP  1.0f     // Goertzel 評価間隔 [Hz]
