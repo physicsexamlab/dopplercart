@@ -449,6 +449,7 @@ let notifyReceived    = false;
 let lastNotifyTime    = 0;
 let lastNotifyPos     = 0;
 let notifyPacketCount = 0;
+let postResetGuard    = 0;   // リセット直後の大ジャンプを捨てるパケット数
 
 // ═══════════════════════════════════════════════════════
 //  Freq Sensor (ESP32) 状態
@@ -601,6 +602,14 @@ function handlePositionNotify(event) {
 
   if (rawChange !== null) {
     const now    = performance.now();
+    // リセット直後: 大きな delta（カート移動残差）を最大3パケット捨てる
+    if (postResetGuard > 0) {
+      if (Math.abs(rawChange) * POS_SCALE > 0.05) {
+        postResetGuard--;
+        return;
+      }
+      postResetGuard = 0;
+    }
     countAccumulated += rawChange;
     const newPos = countAccumulated * POS_SCALE;
     if (lastNotifyTime > 0) {
@@ -1306,6 +1315,13 @@ function resetAll() {
   countAccumulated = 0; lastPacketSeq = -1;
   latestPosition = 0; latestVelocity = 0;
   notifyReceived = false; lastNotifyTime = 0; lastNotifyPos = 0; notifyPacketCount = 0;
+  postResetGuard = 3;   // 次の3パケットで大ジャンプが来たら捨てる
+  // PASCO Smart Cart エンコーダをゼロ点リセット
+  if (posCmdChar) {
+    posCmdChar.writeValueWithoutResponse(new Uint8Array([0x05, 0x01]))
+      .then(() => log('[RESET] Encoder zero sent to cart.'))
+      .catch(e => log(`[RESET] Encoder zero failed: ${e.message}`));
+  }
   prevFreqEspTime = -1; firstFreqEspTime = -1;
   posSession = []; freqSession = [];
   posValues = []; velValues = []; velSmoothValues = []; freqDualValues = [];
