@@ -75,8 +75,6 @@
 #define FREQ_HIGH     1040.0f
 #define FREQ_STEP     1.0f
 
-#define FREQ_CONT_HZ     8.0f    // 連続性閾値: 1フレームで8Hz超変化は偽ピーク棄却
-#define FREQ_WATCHDOG_HZ 5.0f    // 位相スリップ番犬: scan vs phase の最大許容差
 
 #define N_CAL_SCAN    50          // fc 決定に必要な有効ブロック数（≈2.75s）
 #define N_CAL_PHASE   20          // Δφ₀ 決定に必要な有効ブロック数（≈1.1s）
@@ -114,9 +112,6 @@ static int      fc_cand_count   = 0;
 static float    dphi_cands[N_CAL_PHASE];
 static int      dphi_cand_count = 0;
 
-// 連続性チェック用（偽ピーク除去）
-static float    last_freq_scan  = -1.0f;
-static int      scan_miss_count = 0;
 
 // ─── ユーティリティ ────────────────────────────────────
 
@@ -178,8 +173,6 @@ static void start_recal() {
   fc_cand_count   = 0;
   dphi_cand_count = 0;
   prev_phi_valid  = false;
-  last_freq_scan  = -1.0f;
-  scan_miss_count = 0;
 }
 
 // ─── BLE コマンドコールバック ──────────────────────────
@@ -293,19 +286,6 @@ void loop() {
     freq_scan = FREQ_LOW + bestB * FREQ_STEP + delta * FREQ_STEP;
   }
 
-  // 連続性チェック（1フレームで FREQ_CONT_HZ 超の跳躍は偽ピークとして棄却）
-  if (freq_scan > 0.0f) {
-    if (last_freq_scan > 0.0f && fabsf(freq_scan - last_freq_scan) > FREQ_CONT_HZ) {
-      freq_scan = -1.0f;                    // 棄却
-    } else {
-      last_freq_scan  = freq_scan;
-      scan_miss_count = 0;
-    }
-  }
-  if (freq_scan < 0.0f) {
-    if (++scan_miss_count > 3) last_freq_scan = -1.0f;  // 3連続ミスで参照値リセット
-  }
-
   // ── 5. キャリブレーション / 位相追跡 ─────────────────
 
   // SCANNING: 有効な freq_scan を蓄積し中央値から fc を決定
@@ -361,17 +341,6 @@ void loop() {
 
     } else {
       // フェード（amp < 閾値）→ 次回の位相差を無効化
-      prev_phi_valid = false;
-    }
-  }
-
-  // 位相スリップ番犬（freq_scan を参照して freq_phase を検証）
-  // 両者が有効かつ FREQ_WATCHDOG_HZ 超の乖離 → スリップと判定してリセット
-  if (freq_phase > 0.0f && freq_scan > 0.0f) {
-    if (fabsf(freq_phase - freq_scan) > FREQ_WATCHDOG_HZ) {
-      Serial.printf("[WARN] phase slip: scan=%.2f phase=%.2f → reset\n",
-                    freq_scan, freq_phase);
-      freq_phase     = -1.0f;
       prev_phi_valid = false;
     }
   }
