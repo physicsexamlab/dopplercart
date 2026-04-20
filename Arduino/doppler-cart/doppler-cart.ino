@@ -33,12 +33,14 @@
 #define MIC_PIN    A0       // アナログ入力（Arduino Nano ESP32）
 #define N          1600     // サンプル数（≈110ms @ ~14.5kHz）
 #define MIN_PP          200      // 品質閾値: peak-to-peak [ADC counts]
-#define AMPLITUDE_MIN   50.0f    // Goertzel amplitude 閾値 [counts]
+#define AMPLITUDE_MIN   80.0f    // Goertzel amplitude 閾値 [counts]
                                  // ノイズフロア(MAX9814 60dB): ≈2〜28 counts
                                  // 音源あり: ≈460〜610 counts → 余裕十分
+                                 // 50→80: 50〜79は偽値を出力しうるため除外
 #define FREQ_LOW   960.0f
 #define FREQ_HIGH  1040.0f
 #define FREQ_STEP  1.0f     // Goertzel 評価間隔 [Hz]
+#define FREQ_CONT_HZ 8.0f   // 連続性閾値: 1フレームで8Hz超変化は偽ピーク棄却
 // ─────────────────────────────────────────────────────
 
 #define N_BINS  ((int)((FREQ_HIGH - FREQ_LOW) / FREQ_STEP) + 1)  // 81
@@ -49,6 +51,9 @@
 static NimBLEServer*         pServer = nullptr;
 static NimBLECharacteristic* pChar   = nullptr;
 static bool wasConnected = false;
+
+static float last_freq_scan  = -1.0f;
+static int   scan_miss_count = 0;
 
 // サンプルバッファ（グローバルでスタック節約）
 static uint16_t raw[N];
@@ -161,6 +166,19 @@ void loop() {
     freq_hz = FREQ_LOW + bestB * FREQ_STEP + delta * FREQ_STEP;
   }
 
+  // 連続性チェック（偽ピーク除去）
+  if (freq_hz > 0.0f) {
+    if (last_freq_scan > 0.0f && fabsf(freq_hz - last_freq_scan) > FREQ_CONT_HZ) {
+      freq_hz = -1.0f;
+    } else {
+      last_freq_scan  = freq_hz;
+      scan_miss_count = 0;
+    }
+  }
+  if (freq_hz < 0.0f) {
+    if (++scan_miss_count > 3) last_freq_scan = -1.0f;
+  }
+
   // ── 6. 送信 ──────────────────────────────────────
   const float t_esp_s = micros() * 1e-6f;
   char msg[64];
@@ -170,5 +188,5 @@ void loop() {
     pChar->setValue(msg);
     pChar->notify();
   }
-  Serial.println(msg);
+//  Serial.println(msg);
 }

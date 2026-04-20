@@ -451,6 +451,10 @@ let lastNotifyPos     = 0;
 let notifyPacketCount = 0;
 let postResetGuard    = 0;   // リセット直後の大ジャンプを捨てるパケット数
 
+// JS 側安全網（ファームウェア更新前の旧機との互換）
+let lastValidFreqScan = -1;
+let jsScanMissCount   = 0;
+
 // ═══════════════════════════════════════════════════════
 //  Freq Sensor (ESP32) 状態
 // ═══════════════════════════════════════════════════════
@@ -692,6 +696,24 @@ function onFreqNotify(event) {
   }
   prevFreqEspTime = t_esp_s;
 
+  // ── JS 側安全網（旧ファームウェアとの互換・二重フィルタ）──────
+  // freq_scan 連続性チェック（1フレームで8Hz超の跳躍は偽ピーク）
+  if (freq_scan > 0) {
+    if (lastValidFreqScan > 0 && Math.abs(freq_scan - lastValidFreqScan) > 8) {
+      freq_scan = -1;
+    } else {
+      lastValidFreqScan = freq_scan;
+      jsScanMissCount   = 0;
+    }
+  }
+  if (freq_scan < 0 && ++jsScanMissCount > 3) lastValidFreqScan = -1;
+
+  // 位相スリップ番犬（scan が有効で phase と5Hz超の乖離 → phase を無効化）
+  if (freq_phase > 0 && freq_scan > 0 && Math.abs(freq_phase - freq_scan) > 5) {
+    freq_phase = -1;
+  }
+  // ───────────────────────────────────────────────────────────────
+
   freqSession.push({
     t_true_ms, elapsed_s,
     freq_scan, freq_phase, amplitude,
@@ -703,7 +725,8 @@ function onFreqNotify(event) {
   const phaseOk = freq_phase > 0 && amplitude >= ampThreshold;
   freqDualValues.push({
     scan:  scanOk  ? freq_scan  : null,
-    phase: phaseOk ? freq_phase : null
+    phase: phaseOk ? freq_phase : null,
+    amp:   amplitude
   });
   if (freqDualValues.length > MAX_POINTS) freqDualValues.shift();
 
@@ -921,21 +944,36 @@ function drawFreqDualChart(ctx, dualData, labelEl) {
   }
 
   // ── 位相追跡法（青・太線）────────────────────────
+  // 高信頼（amp >= ampThreshold*2）は実線、低信頼は灰色点で区別
+  const highAmpThr = ampThreshold * 2;
+
   ctx.strokeStyle = '#0044cc'; ctx.lineWidth = 2.5;
   ctx.beginPath();
   for (let i = 0; i < n; i++) {
-    const v = dualData[i].phase;
-    if (v === null) continue;
-    const x = toX(i), y = toY(v);
-    const prevOk = i > 0 && dualData[i - 1].phase !== null;
+    const d = dualData[i];
+    if (d.phase === null || d.amp < highAmpThr) continue;
+    const x = toX(i), y = toY(d.phase);
+    const prevOk = i > 0 && dualData[i - 1].phase !== null && dualData[i - 1].amp >= highAmpThr;
     prevOk ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
   }
   ctx.stroke();
 
+  // 低信頼点（ampThreshold 以上かつ highAmpThr 未満）を灰色小円で表示
+  for (let i = 0; i < n; i++) {
+    const d = dualData[i];
+    if (d.phase === null || d.amp >= highAmpThr) continue;
+    ctx.fillStyle = 'rgba(120,140,170,0.55)';
+    ctx.beginPath();
+    ctx.arc(toX(i), toY(d.phase), 2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
   // 最新値マーカー（位相法）
   for (let i = n - 1; i >= 0; i--) {
     if (dualData[i].phase !== null) {
-      ctx.fillStyle = '#0044cc'; ctx.beginPath();
+      const isLowConf = dualData[i].amp < highAmpThr;
+      ctx.fillStyle = isLowConf ? 'rgba(120,140,170,0.7)' : '#0044cc';
+      ctx.beginPath();
       ctx.arc(toX(i), toY(dualData[i].phase), 4, 0, Math.PI * 2);
       ctx.fill(); break;
     }
@@ -1316,6 +1354,7 @@ function resetAll() {
   latestPosition = 0; latestVelocity = 0;
   notifyReceived = false; lastNotifyTime = 0; lastNotifyPos = 0; notifyPacketCount = 0;
   postResetGuard = 3;   // 次の3パケットで大ジャンプが来たら捨てる
+  lastValidFreqScan = -1; jsScanMissCount = 0;
   // PASCO Smart Cart エンコーダをゼロ点リセット
   if (posCmdChar) {
     posCmdChar.writeValueWithoutResponse(new Uint8Array([0x05, 0x01]))
@@ -1466,7 +1505,8 @@ document.getElementById('ampSlider').addEventListener('input', function () {
   // 表示用バッファを再構築
   freqDualValues = freqSession.slice(-MAX_POINTS).map(f => ({
     scan:  (f.freq_scan  > 0 && f.amplitude >= ampThreshold) ? f.freq_scan  : null,
-    phase: (f.freq_phase > 0 && f.amplitude >= ampThreshold) ? f.freq_phase : null
+    phase: (f.freq_phase > 0 && f.amplitude >= ampThreshold) ? f.freq_phase : null,
+    amp:   f.amplitude
   }));
   drawFreqDualChart(ctxFreq, freqDualValues, document.getElementById('freqAxisLabel'));
   drawScatter();
