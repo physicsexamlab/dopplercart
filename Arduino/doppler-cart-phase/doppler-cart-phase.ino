@@ -359,5 +359,4 @@ void loop() {
     pNotify->setValue(msg);
     pNotify->notify();
   }
-  Serial.println(msg);
 }
