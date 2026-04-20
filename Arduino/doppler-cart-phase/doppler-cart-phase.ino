@@ -66,10 +66,11 @@
 #define MIC_PIN       A0
 #define N             800         // サンプル数（≈55ms @ ~14.5kHz）
 #define MIN_PP        200         // 品質閾値: peak-to-peak [ADC counts]
-#define AMPLITUDE_MIN 80.0f       // 正規化振幅閾値 [counts]
-                                  //   ノイズフロア(MAX9814 60dB): ≈2〜28
-                                  //   音源あり: ≈460〜610 → 余裕十分
-                                  //   50→80: 50〜79は偽値を出力しうるため除外
+#define AMPLITUDE_MIN_SCAN  80.0f  // スキャン法の閾値: 低SNRで偽ピーク誤検出を防ぐ
+#define AMPLITUDE_MIN_PHASE 40.0f  // 位相法の閾値: 振幅変動に頑健なため緩めに設定
+                                   //   ノイズフロア(MAX9814 60dB): ≈2〜28
+                                   //   位相法は Δφ から周波数を求めるため
+                                   //   SNR低下は誤値でなくノイズ増加として現れる
 
 #define FREQ_LOW      960.0f
 #define FREQ_HIGH     1040.0f
@@ -272,7 +273,7 @@ void loop() {
   const float amplitude = mag[bestB] / (N / 2.0f);
 
   float freq_scan = -1.0f;
-  if (pp >= MIN_PP && amplitude >= AMPLITUDE_MIN) {
+  if (pp >= MIN_PP && amplitude >= AMPLITUDE_MIN_SCAN) {
     float delta = 0.0f;
     if (bestB > 0 && bestB < N_BINS - 1) {
       const float y1 = mag[bestB - 1], y2 = mag[bestB], y3 = mag[bestB + 1];
@@ -311,7 +312,7 @@ void loop() {
     goertzel_iq(fc, fs, &I_fc, &Q_fc);
     const float amp_fc = sqrtf(I_fc * I_fc + Q_fc * Q_fc);
 
-    if (amp_fc >= AMPLITUDE_MIN) {
+    if (amp_fc >= AMPLITUDE_MIN_PHASE) {
       const float phi = atan2f(Q_fc, I_fc);
 
       if (calState == CAL_PHASE) {
