@@ -449,7 +449,8 @@ let notifyReceived    = false;
 let lastNotifyTime    = 0;
 let lastNotifyPos     = 0;
 let notifyPacketCount = 0;
-let postResetGuard    = 0;   // リセット直後の大ジャンプを捨てるパケット数
+let postResetGuard       = 0;    // リセット直後の大ジャンプを捨てるパケット数
+let lastPositionNotifyMs = 0;    // 最後の位置 notify 受信時刻（stale 検出用）
 
 // JS 側安全網（ファームウェア更新前の旧機との互換）
 let lastValidFreqScan = -1;
@@ -598,6 +599,13 @@ function handlePositionNotify(event) {
   } else if (data.byteLength >= 3 && data.getUint8(0) <= 0x1F) {
     const seq = data.getUint8(0);
     if (seq === lastPacketSeq) return;
+    if (lastPacketSeq >= 0) {
+      const expected = (lastPacketSeq + 1) % 32;
+      if (seq !== expected) {
+        const lost = ((seq - lastPacketSeq - 1) + 32) % 32;
+        log(`[pos] seq gap: ${lastPacketSeq}→${seq} (${lost} pkt lost)`);
+      }
+    }
     lastPacketSeq = seq;
     rawChange = data.getInt16(1, true);
     if (posAckChar)
@@ -606,6 +614,7 @@ function handlePositionNotify(event) {
 
   if (rawChange !== null) {
     const now    = performance.now();
+    lastPositionNotifyMs = now;
     // リセット直後: 大きな delta（カート移動残差）を最大3パケット捨てる
     if (postResetGuard > 0) {
       if (Math.abs(rawChange) * POS_SCALE > 0.05) {
@@ -1083,7 +1092,6 @@ function drawScatter() {
   }
   ctxScatter.stroke();
 
-  const HALF_WIN = 2;
   const n = freqSession.length;
   let nScan = 0, nPhase = 0;
 
@@ -1092,13 +1100,9 @@ function drawScatter() {
     for (let i = 0; i < n; i++) {
       const f = freqSession[i];
       if (f.freq_scan <= 0 || f.amplitude < ampThreshold) continue;
-      const lo = Math.max(0, i - HALF_WIN), hi = Math.min(n - 1, i + HALF_WIN);
-      const pLo = interpolatePos(freqSession[lo].t_true_ms);
-      const pHi = interpolatePos(freqSession[hi].t_true_ms);
-      if (!pLo || !pHi) continue;
-      const dt = freqSession[hi].elapsed_s - freqSession[lo].elapsed_s;
-      if (dt <= 0) continue;
-      const v  = (pHi.pos_m - pLo.pos_m) / dt;
+      const pi = interpolatePos(f.t_true_ms);
+      if (!pi) continue;
+      const v = pi.vel_ms;
       if (Math.abs(v) > 5) continue;
       const df = f.freq_scan - fRef;
       const x = toX(v), y = toY(df);
@@ -1115,13 +1119,9 @@ function drawScatter() {
   for (let i = 0; i < n; i++) {
     const f = freqSession[i];
     if (f.freq_phase <= 0 || f.amplitude < ampThreshold) continue;
-    const lo = Math.max(0, i - HALF_WIN), hi = Math.min(n - 1, i + HALF_WIN);
-    const pLo = interpolatePos(freqSession[lo].t_true_ms);
-    const pHi = interpolatePos(freqSession[hi].t_true_ms);
-    if (!pLo || !pHi) continue;
-    const dt = freqSession[hi].elapsed_s - freqSession[lo].elapsed_s;
-    if (dt <= 0) continue;
-    const v  = (pHi.pos_m - pLo.pos_m) / dt;
+    const pi = interpolatePos(f.t_true_ms);
+    if (!pi) continue;
+    const v = pi.vel_ms;
     if (Math.abs(v) > 5) continue;
     const df = f.freq_phase - fRef;
     const x = toX(v), y = toY(df);
@@ -1414,20 +1414,11 @@ function buildCsv() {
   if (freqSession.length > 0) {
     let out = 'elapsed_s,pos_m,vel_ms,freq_scan,freq_phase,amplitude,status,fc,gap_ok\n';
     const nf    = freqSession.length;
-    const HWIN  = 1;
     for (let i = 0; i < nf; i++) {
-      const f = freqSession[i];
-      const p = interpolatePos(f.t_true_ms);
-      const pos_m = p ? p.pos_m : null;
-
-      const lo  = Math.max(0, i - HWIN), hi = Math.min(nf - 1, i + HWIN);
-      const pLo = interpolatePos(freqSession[lo].t_true_ms);
-      const pHi = interpolatePos(freqSession[hi].t_true_ms);
-      let vel_ms = 0;
-      if (pLo && pHi) {
-        const dt = freqSession[hi].elapsed_s - freqSession[lo].elapsed_s;
-        if (dt > 0) vel_ms = (pHi.pos_m - pLo.pos_m) / dt;
-      }
+      const f      = freqSession[i];
+      const p      = interpolatePos(f.t_true_ms);
+      const pos_m  = p ? p.pos_m  : null;
+      const vel_ms = p ? p.vel_ms : 0;
 
       const pos_str  = pos_m !== null ? pos_m.toFixed(6)  : '';
       const amp_str  = f.amplitude    != null ? f.amplitude.toFixed(4) : '';
