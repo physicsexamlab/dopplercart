@@ -1092,6 +1092,7 @@ function drawScatter() {
   }
   ctxScatter.stroke();
 
+  const HALF_WIN = 3;
   const n = freqSession.length;
   let nScan = 0, nPhase = 0;
 
@@ -1100,9 +1101,13 @@ function drawScatter() {
     for (let i = 0; i < n; i++) {
       const f = freqSession[i];
       if (f.freq_scan <= 0 || f.amplitude < ampThreshold) continue;
-      const pi = interpolatePos(f.t_true_ms);
-      if (!pi) continue;
-      const v = pi.vel_ms;
+      const lo = Math.max(0, i - HALF_WIN), hi = Math.min(n - 1, i + HALF_WIN);
+      const pLo = interpolatePos(freqSession[lo].t_true_ms);
+      const pHi = interpolatePos(freqSession[hi].t_true_ms);
+      if (!pLo || !pHi) continue;
+      const dt = freqSession[hi].elapsed_s - freqSession[lo].elapsed_s;
+      if (dt <= 0) continue;
+      const v = (pHi.pos_m - pLo.pos_m) / dt;
       if (Math.abs(v) > 5) continue;
       const df = f.freq_scan - fRef;
       const x = toX(v), y = toY(df);
@@ -1119,9 +1124,13 @@ function drawScatter() {
   for (let i = 0; i < n; i++) {
     const f = freqSession[i];
     if (f.freq_phase <= 0 || f.amplitude < ampThreshold) continue;
-    const pi = interpolatePos(f.t_true_ms);
-    if (!pi) continue;
-    const v = pi.vel_ms;
+    const lo = Math.max(0, i - HALF_WIN), hi = Math.min(n - 1, i + HALF_WIN);
+    const pLo = interpolatePos(freqSession[lo].t_true_ms);
+    const pHi = interpolatePos(freqSession[hi].t_true_ms);
+    if (!pLo || !pHi) continue;
+    const dt = freqSession[hi].elapsed_s - freqSession[lo].elapsed_s;
+    if (dt <= 0) continue;
+    const v = (pHi.pos_m - pLo.pos_m) / dt;
     if (Math.abs(v) > 5) continue;
     const df = f.freq_phase - fRef;
     const x = toX(v), y = toY(df);
@@ -1414,11 +1423,19 @@ function buildCsv() {
   if (freqSession.length > 0) {
     let out = 'elapsed_s,pos_m,vel_ms,freq_scan,freq_phase,amplitude,status,fc,gap_ok\n';
     const nf    = freqSession.length;
+    const HWIN = 3;
     for (let i = 0; i < nf; i++) {
-      const f      = freqSession[i];
-      const p      = interpolatePos(f.t_true_ms);
-      const pos_m  = p ? p.pos_m  : null;
-      const vel_ms = p ? p.vel_ms : 0;
+      const f   = freqSession[i];
+      const p   = interpolatePos(f.t_true_ms);
+      const pos_m = p ? p.pos_m : null;
+      const lo  = Math.max(0, i - HWIN), hi = Math.min(nf - 1, i + HWIN);
+      const pLo = interpolatePos(freqSession[lo].t_true_ms);
+      const pHi = interpolatePos(freqSession[hi].t_true_ms);
+      let vel_ms = 0;
+      if (pLo && pHi) {
+        const dt = freqSession[hi].elapsed_s - freqSession[lo].elapsed_s;
+        if (dt > 0) vel_ms = (pHi.pos_m - pLo.pos_m) / dt;
+      }
 
       const pos_str  = pos_m !== null ? pos_m.toFixed(6)  : '';
       const amp_str  = f.amplitude    != null ? f.amplitude.toFixed(4) : '';
