@@ -1,5 +1,5 @@
 <!--
-  doppler-phase.html  (v1 — Goertzel I/Q 位相追跡法)
+  doppler-phase-v2.html  (v2 — Goertzel I/Q 位相追跡法)
   doppler-cart-phase.ino (Char 2A58 Notify + Char 2A59 Write) と組み合わせて使用
 
   従来の「スキャン法（81点Goertzel＋放物線補間）」と
@@ -13,7 +13,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Doppler Cart — 位相追跡法</title>
+<title>Doppler Cart — 位相追跡法 v2</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Exo+2:wght@300;600;800&display=swap');
 
@@ -30,6 +30,7 @@
     --col-vel:   #4a8c00;
     --col-scan:  #b06000;   /* スキャン法: 薄い橙 */
     --col-phase: #0044cc;   /* 位相追跡法: 青 */
+    --col-pll:   #aa0077;   /* PLL 推定: 紫 */
     --danger:    #d42045;
     --warn:      #b86e00;
     --accent2:   #008855;
@@ -252,10 +253,16 @@
     <button class="btn-reset" id="btnReset" disabled>Reset</button>
     <button class="btn-csv"   id="btnCsv"   disabled>CSV Export</button>
     <label style="display:flex;align-items:center;gap:7px;font-size:0.78rem;color:var(--dim);margin-left:10px;">
-      Amp ≥
-      <input type="range" id="ampSlider" min="0" max="500" step="10" value="100"
+      Scan Amp ≥
+      <input type="range" id="scanAmpSlider" min="0" max="500" step="10" value="100"
+             style="width:80px;accent-color:var(--col-scan);">
+      <span id="scanAmpSliderVal" style="font-family:'Share Tech Mono',monospace;min-width:2.5em;">100</span>
+    </label>
+    <label style="display:flex;align-items:center;gap:7px;font-size:0.78rem;color:var(--dim);margin-left:2px;">
+      Phase Amp ≥
+      <input type="range" id="phaseAmpSlider" min="0" max="100" step="1" value="10"
              style="width:80px;accent-color:var(--col-phase);">
-      <span id="ampSliderVal" style="font-family:'Share Tech Mono',monospace;min-width:2.5em;">100</span>
+      <span id="phaseAmpSliderVal" style="font-family:'Share Tech Mono',monospace;min-width:2.5em;">10</span>
     </label>
     <label style="display:flex;align-items:center;gap:6px;font-size:0.78rem;color:var(--dim);margin-left:6px;">
       <input type="checkbox" id="chkShowScan" checked style="accent-color:var(--col-scan);">
@@ -313,9 +320,10 @@
       <div class="stat-value" id="sFreqScan">—</div>
     </div>
     <div class="stat-card phase">
-      <div class="stat-label">Freq — 位相追跡法</div>
+      <div class="stat-label">Freq — 位相追跡法 / PLL</div>
       <div class="stat-value" id="sFreqPhase">—</div>
-      <div class="stat-sub"   id="sAmplitude"></div>
+      <div class="stat-sub" id="sFreqPll" style="color:var(--col-pll);"></div>
+      <div class="stat-sub" id="sAmplitude"></div>
     </div>
   </div>
 
@@ -354,7 +362,8 @@
         <div class="chart-title">Frequency (Hz)</div>
         <div class="freq-legend">
           <span><span class="legend-dot" style="background:rgba(176,96,0,0.5);"></span>スキャン法</span>
-          <span><span class="legend-dot" style="background:var(--col-phase);height:3px;"></span>位相追跡法</span>
+          <span><span class="legend-dot" style="background:var(--col-phase);"></span>位相追跡法</span>
+          <span><span class="legend-dot" style="background:var(--col-pll);"></span>PLL</span>
         </div>
         <div id="freqAxisLabel" style="font-family:'Share Tech Mono',monospace;font-size:0.7rem;color:var(--dim);"></div>
       </div>
@@ -493,9 +502,45 @@ let velSmoothValues = [];
 // freqDualValues entry: { scan: float|null, phase: float|null }
 let freqDualValues  = [];
 
-let ampThreshold  = 100;
-let showScan      = true;
+let scanAmpThreshold  = 100;
+let phaseAmpThreshold = 10;
+let showScan          = true;
 const VEL_SMOOTH_WIN = 5;
+
+function medianOf(values) {
+  if (!values || values.length === 0) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)];
+}
+
+function isScanPointUsable(f) {
+  return !!f && f.gap_ok && f.freq_scan > 0 && f.amplitude >= scanAmpThreshold;
+}
+
+function isPhasePointUsable(f) {
+  return !!f && f.gap_ok && f.freq_phase > 0 && f.amplitude >= phaseAmpThreshold;
+}
+
+function buildDualPoint(f) {
+  return {
+    scan:  isScanPointUsable(f)  ? f.freq_scan  : null,
+    phase: isPhasePointUsable(f) ? f.freq_phase : null,
+    pll:   (f && f.gap_ok && f.freq_pll > 0) ? f.freq_pll : null,
+    amp:   f ? f.amplitude : null
+  };
+}
+
+function estimateStaticPhaseOffsetHz() {
+  const offsets = freqSession
+    .slice(-80)
+    .filter(isPhasePointUsable)
+    .map(f => {
+      const p = interpolatePos(f.t_true_ms);
+      return p && Math.abs(p.vel_ms) < 0.08 ? (f.freq_phase - f.fc) : null;
+    })
+    .filter(v => v !== null);
+  return offsets.length >= 5 ? medianOf(offsets) : null;
+}
 
 // ═══════════════════════════════════════════════════════
 //  診断ログ
@@ -572,7 +617,7 @@ function updateCalPanel() {
 
   // Δφ₀ 表示（TRACKING 到達後）
   if (lastCalStatus === 2 && lastDphi0Hz !== null) {
-    dp0Val.textContent = `Δφ₀ による 等価オフセット: ${lastDphi0Hz >= 0 ? '+' : ''}${lastDphi0Hz.toFixed(3)} Hz`;
+    dp0Val.textContent = `静止時近似の Δφ₀ 等価オフセット: ${lastDphi0Hz >= 0 ? '+' : ''}${lastDphi0Hz.toFixed(3)} Hz`;
   } else {
     dp0Val.textContent = '';
   }
@@ -651,9 +696,17 @@ function onFreqNotify(event) {
 
   const t_esp_s = parseFloat(parts[0]);
 
-  // 7フィールド (新ファームウェア) / 3フィールド (旧) の両対応
-  let freq_scan, freq_phase, amplitude, status, fc_val, cal_progress;
-  if (parts.length >= 7) {
+  // 8フィールド (PLL対応) / 7フィールド (旧) / 3フィールド (最旧) の互換対応
+  let freq_scan, freq_phase, freq_pll = -1, amplitude, status, fc_val, cal_progress;
+  if (parts.length >= 8) {
+    freq_scan    = parseFloat(parts[1]);
+    freq_phase   = parseFloat(parts[2]);
+    amplitude    = parseFloat(parts[3]);
+    status       = parseInt(parts[4]);
+    fc_val       = parseFloat(parts[5]);
+    cal_progress = parseInt(parts[6]);
+    freq_pll     = parseFloat(parts[7]);
+  } else if (parts.length >= 7) {
     freq_scan    = parseFloat(parts[1]);
     freq_phase   = parseFloat(parts[2]);
     amplitude    = parseFloat(parts[3]);
@@ -705,7 +758,7 @@ function onFreqNotify(event) {
   }
   prevFreqEspTime = t_esp_s;
 
-  // ── JS 側安全網（旧ファームウェアとの互換・二重フィルタ）──────
+  // ── JS 側安全網（旧ファームウェアとの互換）──────────────────────
   // freq_scan 連続性チェック（1フレームで8Hz超の跳躍は偽ピーク）
   if (freq_scan > 0) {
     if (lastValidFreqScan > 0 && Math.abs(freq_scan - lastValidFreqScan) > 8) {
@@ -717,45 +770,27 @@ function onFreqNotify(event) {
   }
   if (freq_scan < 0 && ++jsScanMissCount > 3) lastValidFreqScan = -1;
 
-  // 位相スリップ番犬（scan が有効で phase と5Hz超の乖離 → phase を無効化）
-  if (freq_phase > 0 && freq_scan > 0 && Math.abs(freq_phase - freq_scan) > 5) {
-    freq_phase = -1;
-  }
-
-  // 物理的範囲チェック（scan が -1 でも有効：最大 Δf ≈ fc×v/c）
-  // v=2.1 m/s → Δf ≈ 6.1 Hz → 6 Hz 超は位相スリップと判定
-  if (freq_phase > 0 && fc_val > 0 && Math.abs(freq_phase - fc_val) > 6) {
+  // 物理的範囲チェック（最大 Δf ≈ fc×v/c、v=4.1 m/s → ±12 Hz）
+  if (freq_phase > 0 && fc_val > 0 && Math.abs(freq_phase - fc_val) > 12) {
     freq_phase = -1;
   }
   // ───────────────────────────────────────────────────────────────
 
-  freqSession.push({
+  const sample = {
     t_true_ms, elapsed_s,
-    freq_scan, freq_phase, amplitude,
+    freq_scan, freq_phase, freq_pll, amplitude,
     status, fc: fc_val, gap_ok
-  });
+  };
+  freqSession.push(sample);
 
   // 表示用デュアルバッファに追加
-  const scanOk  = freq_scan  > 0 && amplitude >= ampThreshold;
-  const phaseOk = freq_phase > 0 && amplitude >= ampThreshold;
-  freqDualValues.push({
-    scan:  scanOk  ? freq_scan  : null,
-    phase: phaseOk ? freq_phase : null,
-    amp:   amplitude
-  });
+  freqDualValues.push(buildDualPoint(sample));
   if (freqDualValues.length > MAX_POINTS) freqDualValues.shift();
 
-  // TRACKING到達後に静止時 Δφ₀ 等価Hz を推定（|freq_phase - fc| の静止中央値）
-  if (status === 2 && freq_phase > 0) {
-    // 簡易推定: 最近 20 点の freq_phase - fc の平均（静止時近似）
-    const recentPhase = freqSession
-      .slice(-20)
-      .filter(f => f.status === 2 && f.freq_phase > 0)
-      .map(f => f.freq_phase - f.fc);
-    if (recentPhase.length >= 5) {
-      recentPhase.sort((a, b) => a - b);
-      lastDphi0Hz = recentPhase[Math.floor(recentPhase.length / 2)];
-    }
+  // TRACKING到達後に、静止時に近い点だけで Δφ₀ 等価Hz を推定
+  if (status === 2) {
+    const offsetHz = estimateStaticPhaseOffsetHz();
+    if (offsetHz !== null) lastDphi0Hz = offsetHz;
   }
 
   drawFreqDualChart(ctxFreq, freqDualValues, document.getElementById('freqAxisLabel'));
@@ -915,6 +950,7 @@ function drawFreqDualChart(ctx, dualData, labelEl) {
   for (const d of dualData) {
     if (d.scan  !== null) allVals.push(d.scan);
     if (d.phase !== null) allVals.push(d.phase);
+    if (d.pll   !== null) allVals.push(d.pll);
   }
   if (allVals.length < 2) return;
   let min = Math.min(...allVals), max = Math.max(...allVals);
@@ -960,7 +996,7 @@ function drawFreqDualChart(ctx, dualData, labelEl) {
 
   // ── 位相追跡法（青・太線）────────────────────────
   // 高信頼（amp >= ampThreshold*2）は実線、低信頼は灰色点で区別
-  const highAmpThr = ampThreshold * 2;
+  const highAmpThr = Math.max(phaseAmpThreshold * 2, phaseAmpThreshold + 10);
 
   ctx.strokeStyle = '#0044cc'; ctx.lineWidth = 2.5;
   ctx.beginPath();
@@ -994,6 +1030,26 @@ function drawFreqDualChart(ctx, dualData, labelEl) {
     }
   }
 
+  // ── PLL 推定（紫・実線）────────────────────────────
+  ctx.strokeStyle = '#aa0077'; ctx.lineWidth = 2;
+  ctx.beginPath();
+  for (let i = 0; i < n; i++) {
+    const v = dualData[i].pll;
+    if (v === null) continue;
+    const x = toX(i), y = toY(v);
+    const prevOk = i > 0 && dualData[i - 1].pll !== null;
+    prevOk ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+  }
+  ctx.stroke();
+  // 最新値マーカー（PLL）
+  for (let i = n - 1; i >= 0; i--) {
+    if (dualData[i].pll !== null) {
+      ctx.fillStyle = '#aa0077';
+      ctx.beginPath(); ctx.arc(toX(i), toY(dualData[i].pll), 4, 0, Math.PI * 2);
+      ctx.fill(); break;
+    }
+  }
+
   if (labelEl) {
     labelEl.textContent = `min ${min.toFixed(2)} / max ${max.toFixed(2)} Hz`;
   }
@@ -1006,7 +1062,7 @@ function getFRef() {
   if (lastCalStatus === 2 && lastFc > 0) return lastFc;
   // フォールバック: 位相法の静止時中央値
   const vals = freqSession
-    .filter(f => f.freq_phase > 0 && f.amplitude >= ampThreshold)
+    .filter(isPhasePointUsable)
     .map(f => {
       const p = interpolatePos(f.t_true_ms);
       return p && Math.abs(p.vel_ms) < 0.08 ? f.freq_phase : null;
@@ -1018,7 +1074,7 @@ function getFRef() {
   }
   // さらにフォールバック: スキャン法中央値
   const scanVals = freqSession
-    .filter(f => f.freq_scan > 0 && f.amplitude >= ampThreshold)
+    .filter(isScanPointUsable)
     .map(f => {
       const p = interpolatePos(f.t_true_ms);
       return p && Math.abs(p.vel_ms) < 0.08 ? f.freq_scan : null;
@@ -1100,7 +1156,7 @@ function drawScatter() {
   if (showScan) {
     for (let i = 0; i < n; i++) {
       const f = freqSession[i];
-      if (f.freq_scan <= 0 || f.amplitude < ampThreshold) continue;
+      if (!isScanPointUsable(f)) continue;
       const lo = Math.max(0, i - HALF_WIN), hi = Math.min(n - 1, i + HALF_WIN);
       const pLo = interpolatePos(freqSession[lo].t_true_ms);
       const pHi = interpolatePos(freqSession[hi].t_true_ms);
@@ -1123,7 +1179,7 @@ function drawScatter() {
   // 位相追跡法の点（大きい青点）
   for (let i = 0; i < n; i++) {
     const f = freqSession[i];
-    if (f.freq_phase <= 0 || f.amplitude < ampThreshold) continue;
+    if (!isPhasePointUsable(f)) continue;
     const lo = Math.max(0, i - HALF_WIN), hi = Math.min(n - 1, i + HALF_WIN);
     const pLo = interpolatePos(freqSession[lo].t_true_ms);
     const pHi = interpolatePos(freqSession[hi].t_true_ms);
@@ -1153,7 +1209,8 @@ function drawScatter() {
   const parts  = [];
   if (showScan)  parts.push(`scan: ${nScan}`);
   parts.push(`phase: ${nPhase}`);
-  if (infoEl) infoEl.textContent = `amp≥${ampThreshold}: ${parts.join(' / ')} pts`;
+  if (infoEl) infoEl.textContent =
+    `scan amp≥${scanAmpThreshold} / phase amp≥${phaseAmpThreshold}: ${parts.join(' / ')} pts`;
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1168,8 +1225,8 @@ function updateStats() {
     document.getElementById('sVelLast').textContent = vSmooth.toFixed(3)   + ' m/s';
   }
 
-  const validScan  = freqSession.filter(f => f.freq_scan  > 0 && f.amplitude >= ampThreshold);
-  const validPhase = freqSession.filter(f => f.freq_phase > 0 && f.amplitude >= ampThreshold);
+  const validScan  = freqSession.filter(isScanPointUsable);
+  const validPhase = freqSession.filter(isPhasePointUsable);
 
   if (validScan.length > 0)
     document.getElementById('sFreqScan').textContent =
@@ -1179,9 +1236,15 @@ function updateStats() {
     document.getElementById('sFreqPhase').textContent =
       validPhase[validPhase.length - 1].freq_phase.toFixed(2) + ' Hz';
 
-  const lastAmp = freqSession.length > 0 ? freqSession[freqSession.length - 1].amplitude : 0;
+  const validPll = freqSession.filter(f => f.gap_ok && f.freq_pll > 0);
+  document.getElementById('sFreqPll').textContent = validPll.length > 0
+    ? 'pll: ' + validPll[validPll.length - 1].freq_pll.toFixed(2) + ' Hz' : '';
+
+  const lastSample = freqSession.length > 0 ? freqSession[freqSession.length - 1] : null;
+  const lastAmp = lastSample ? lastSample.amplitude : 0;
+  const ampLabel = lastSample && lastSample.status === 2 ? 'IQ amp' : 'scan amp';
   document.getElementById('sAmplitude').textContent =
-    `amp: ${lastAmp.toFixed(0)}  /  fc: ${lastFc.toFixed(2)} Hz`;
+    `${ampLabel}: ${lastAmp.toFixed(0)}  /  fc: ${lastFc.toFixed(2)} Hz`;
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1293,6 +1356,7 @@ async function connectFreqSensor() {
     isFreqConnected = true;
     setFreqStatus('CONNECTED: ' + freqDevice.name, true);
     lastCalStatus = -1;
+    lastDphi0Hz = null;
     updateCalPanel();
     updateButtonStates();
   } catch (e) {
@@ -1306,6 +1370,7 @@ function onFreqDisconnected() {
   isFreqConnected = false;
   pCmdChar        = null;
   lastCalStatus   = -1;
+  lastDphi0Hz     = null;
   setFreqStatus('DISCONNECTED');
   document.getElementById('btnRecal').disabled = true;
   document.getElementById('btnSetFc').disabled = true;
@@ -1379,7 +1444,8 @@ function resetAll() {
   prevFreqEspTime = -1; firstFreqEspTime = -1;
   posSession = []; freqSession = [];
   posValues = []; velValues = []; velSmoothValues = []; freqDualValues = [];
-  ['sPosLast','sVelLast','sFreqScan','sFreqPhase','sAmplitude'].forEach(id => {
+  lastDphi0Hz = null;
+  ['sPosLast','sVelLast','sFreqScan','sFreqPhase','sAmplitude','sFreqPll'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.textContent = '—';
   });
@@ -1421,7 +1487,7 @@ function interpolatePos(t_ms) {
 // ═══════════════════════════════════════════════════════
 function buildCsv() {
   if (freqSession.length > 0) {
-    let out = 'elapsed_s,pos_m,vel_ms,freq_scan,freq_phase,amplitude,status,fc,gap_ok\n';
+    let out = 'elapsed_s,pos_m,vel_ms,freq_scan,freq_phase,freq_pll,amplitude,status,fc,gap_ok\n';
     const nf    = freqSession.length;
     const HWIN = 3;
     for (let i = 0; i < nf; i++) {
@@ -1442,8 +1508,9 @@ function buildCsv() {
       const fc_str   = f.fc           != null ? f.fc.toFixed(2) : '';
       const scan_str = f.freq_scan  > 0 ? f.freq_scan.toFixed(2)  : '-1';
       const ph_str   = f.freq_phase > 0 ? f.freq_phase.toFixed(2) : '-1';
+      const pll_str  = f.freq_pll   > 0 ? f.freq_pll.toFixed(2)   : '-1';
       out += `${f.elapsed_s.toFixed(4)},${pos_str},${vel_ms.toFixed(6)},` +
-             `${scan_str},${ph_str},${amp_str},${f.status},${fc_str},${f.gap_ok}\n`;
+             `${scan_str},${ph_str},${pll_str},${amp_str},${f.status},${fc_str},${f.gap_ok}\n`;
     }
     return out;
   }
@@ -1513,15 +1580,25 @@ window.addEventListener('resize', resizeCanvases);
 resizeCanvases();
 
 // ─── 振幅スライダー ─────────────────────────────────
-document.getElementById('ampSlider').addEventListener('input', function () {
-  ampThreshold = parseInt(this.value, 10);
-  document.getElementById('ampSliderVal').textContent = ampThreshold;
-  // 表示用バッファを再構築
-  freqDualValues = freqSession.slice(-MAX_POINTS).map(f => ({
-    scan:  (f.freq_scan  > 0 && f.amplitude >= ampThreshold) ? f.freq_scan  : null,
-    phase: (f.freq_phase > 0 && f.amplitude >= ampThreshold) ? f.freq_phase : null,
-    amp:   f.amplitude
-  }));
+function rebuildFreqDualValues() {
+  freqDualValues = freqSession.slice(-MAX_POINTS).map(buildDualPoint);
+}
+
+document.getElementById('scanAmpSlider').addEventListener('input', function () {
+  scanAmpThreshold = parseInt(this.value, 10);
+  document.getElementById('scanAmpSliderVal').textContent = scanAmpThreshold;
+  rebuildFreqDualValues();
+  drawFreqDualChart(ctxFreq, freqDualValues, document.getElementById('freqAxisLabel'));
+  drawScatter();
+  updateStats();
+});
+
+document.getElementById('phaseAmpSlider').addEventListener('input', function () {
+  phaseAmpThreshold = parseInt(this.value, 10);
+  document.getElementById('phaseAmpSliderVal').textContent = phaseAmpThreshold;
+  rebuildFreqDualValues();
+  lastDphi0Hz = estimateStaticPhaseOffsetHz();
+  updateCalPanel();
   drawFreqDualChart(ctxFreq, freqDualValues, document.getElementById('freqAxisLabel'));
   drawScatter();
   updateStats();
