@@ -1,5 +1,5 @@
 /*
-  doppler-cart-phase.ino  (v1 — Goertzel I/Q 位相追跡法)
+  doppler-cart-phase.ino  (v3 — 真の PLL: Goertzel を f_est で計算)
   ESP32 (Arduino Nano ESP32) ・ N=800 (≈55ms)
 
   【背景】
@@ -7,48 +7,59 @@
     マイクへの音圧が急激に変動（フェージング）する。
     これにより振幅変調 → スペクトル広がり → Goertzel振幅ピーク法が不安定化する。
 
-    位相追跡法はこれを根本的に解決する：
-      1. Goertzel の I（実部）・Q（虚部）から位相 φ = atan2(Q, I) を取得
-      2. 連続ブロック間の位相差 Δφ を計算
-      3. 静止時キャリブレーションで求めた Δφ₀（キャリア定常進み）を除去
-      4. f = fc + δΔφ · (fs/N) / (2π)  ← 振幅変動に依存しない
+  【v1→v2→v3 の改善経緯】
+    v1: Goertzel を fc で計算。dphi0 を引いて Doppler 成分を取得。
+        → fs 変動と wrap_pi の折り返しが重なり、freq_phase が fc±9Hz に二値化。
 
-  【N=800 を選択した理由（N=1600との比較）】
-    ○ 55ms 更新率でカート位置サンプリングと同期しやすい（散布図精度↑）
-    ○ ドップラー位相進み 2π×3Hz×0.055s ≈ 1.04rad < π → アンラップ安全
-    ○ 短窓の方が深いフェード区間を丸ごと含む確率が低く振幅ゲートが効く
-    △ S/N は N=1600 より √2 倍（≈3dB）劣るが、振幅ゲートで補完可能
-    N=1600 は位相 S/N で有利だが時間分解能が劣り散布図の位置合わせが悪化する
+    v2: dphi0 廃止。T_elapsed ベースの整数サイクル補完でアンラップ。
+        → アルゴリズムは正しいが、「周波数が急変しない」制約を生かしていない。
+        → fc で測った位相差は依然として ≈ ±1 rad と大きく、ノイズの影響を受ける。
 
-  【キャリア周波数 fc の重要性】
-    ESP32 のクロック誤差により実際の音源周波数は 1000Hz からズレる（例: 998Hz）。
-    fc を固定 1000Hz にすると位相に系統的なバイアスが生じる。
-    起動時キャリブレーション（スキャン法の中央値）で fc を実測し、
-    位相キャリブレーションで Δφ₀ を決定することで、クロック誤差・個体差・
-    温度ドリフトを自動吸収する。
+    v3（本版）: Goertzel を fc ではなく f_est（現在の推定値）で計算。
+        → PLL がロックしていれば信号は f_est ≈ f_signal → 位相差 ≈ 0
+        → 整数サイクル補完不要（wrap_pi が常に正しい）
+        → ノイズ由来の位相ゆらぎが f_est に与える影響が最小化される
+        → 「周波数は急激には変化しない」という物理的制約を直接アルゴリズムに組み込む
+
+  【真の PLL の動作原理】
+    各フレーム:
+      1. Goertzel を f_est（前フレームの推定値）で計算 → I, Q
+      2. phi = atan2(Q, I)
+      3. raw_dphi = wrap_pi(phi - prev_phi)
+            ≈ 2π × (f_signal - f_est) × T_el  [ロック時 ≈ 0]
+      4. freq_error = raw_dphi / (2π × T_el)  [Hz, 小さい]
+      5. freq_phase = f_est + freq_error       [単フレーム推定値]
+      6. f_est ← (1-α)×f_est + α×freq_phase  [IIR = f_est + α×freq_error]
+
+    ロック時の位相差の上界:
+      |raw_dphi| ≤ 2π × (max_accel × T_el / (c/fc)) × T_el
+                 = 2π × (1m/s² × 0.055s / (343/996)) × 0.055
+                 ≈ 0.06 rad → wrap_pi で折り返しの心配なし
+
+  【収束特性】
+    時定数 τ = T_el / α = 0.055 / 0.2 ≈ 275ms
+    ドップラー加速度 2.9 Hz/s に対するトラッキング遅れ ≈ 0.8 Hz
+    最大捕捉範囲: |f_signal - f_est| < 1/(2×T_el) ≈ 9Hz（= v < 3 m/s）
 
   【動作フロー】
     SCANNING  (N_CAL_SCAN 有効ブロック):
-      81点スキャン → 周波数中央値 → fc 決定
-    CAL_PHASE (N_CAL_PHASE 有効ブロック):
-      fc 点の I/Q → 連続ブロック Δφ 中央値 → Δφ₀ 決定
+      81点スキャン → 周波数中央値 → fc 決定 → TRACKING へ即移行
     TRACKING:
-      位相差法のみ実行。freq_scan = -1、amplitude は IQ 振幅で送信
+      Goertzel を f_est で計算。freq_scan = -1、amplitude は IQ 振幅で送信。
+      初期フレーム（f_est 未確定）は fc を probe として使用。
 
-  【BLE 出力フォーマット（8フィールド）】
+  【デバッグ出力】
+    #define DEBUG_PHASE を有効にすると TRACKING 中に毎フレーム出力：
+      [PHZ] T=0.0551 probe=993.01 raw=0.0041 err=0.012 fp=993.02 amp=812.3
+      raw が小さければ PLL がロックしている証拠。
+
+  【BLE 出力フォーマット（8フィールド、v1互換）】
     "t_esp_s,freq_scan,freq_phase,amplitude,status,fc,cal_progress,freq_pll"
-    t_esp_s    : ESP32 内部時刻 [s]
-    freq_scan  : スキャン法（放物線補間）[Hz]。TRACKING中または品質不足 → -1
-    freq_phase : 位相差法 [Hz]。TRACKING且つ振幅OK → 有効値。それ以外 → -1
-    amplitude  : 振幅 [counts]。SCANNING/CAL_PHASE=スキャンピーク値、TRACKING=IQ振幅
-    status     : 0=SCANNING, 1=CAL_PHASE, 2=TRACKING
-    fc         : 現在のキャリア周波数 [Hz]
-    cal_progress: SCANNING中=fc蓄積数, CAL_PHASE中=Δφ蓄積数, TRACKING中=0
-    freq_pll   : IIR 平滑化 PLL 推定値 [Hz]。f_est 初期化前 → -1
+    status: 0=SCANNING, 2=TRACKING（CAL_PHASE=1 は廃止）
 
   【BLE コマンド受信 (Char 0x2A59, WRITE)】
     "RECAL"      → キャリブレーション再開（SCANNING へ）
-    "FC:998.3"   → fc を手動設定して CAL_PHASE へ移行
+    "FC:998.3"   → fc を手動設定して TRACKING へ移行
 
   【BLE】
     Service UUID: 0x181A (Environmental Sensing)
@@ -68,20 +79,19 @@
 #define N             800         // サンプル数（≈55ms @ ~14.5kHz）
 #define MIN_PP        200         // 品質閾値: peak-to-peak [ADC counts]
 #define AMPLITUDE_MIN_SCAN  80.0f  // スキャン法の閾値: 低SNRで偽ピーク誤検出を防ぐ
-#define AMPLITUDE_MIN_PHASE 10.0f  // 位相法の閾値: 振幅変動に頑健なため緩めに設定
+#define AMPLITUDE_MIN_PHASE 10.0f  // 位相法の閾値
                                    //   ノイズフロア(MAX9814 60dB): ≈2〜28
-                                   //   位相法は Δφ から周波数を求めるため
-                                   //   SNR低下は誤値でなくノイズ増加として現れる
-#define PLL_ALPHA   0.2f            // IIR 係数 α=0.2 → 等価時定数 ≈ 220ms、ジッタ約 1/3
+#define PLL_ALPHA   0.20f           // IIR 更新係数（時定数 τ = T_el/α ≈ 275ms）
 #define HOLD_MAX    10              // 連続ホールド上限 ≈ 550ms でロック喪失判定
 
-#define FREQ_LOW      960.0f
+// DEBUG_PHASE: 有効にすると TRACKING 中に毎フレームシリアルデバッグ出力
+#define DEBUG_PHASE
+
+#define FREQ_LOW      900.0f
 #define FREQ_HIGH     1040.0f
 #define FREQ_STEP     1.0f
 
-
 #define N_CAL_SCAN    50          // fc 決定に必要な有効ブロック数（≈2.75s）
-#define N_CAL_PHASE   20          // Δφ₀ 決定に必要な有効ブロック数（≈1.1s）
 // ──────────────────────────────────────────────────────
 
 #define N_BINS  ((int)((FREQ_HIGH - FREQ_LOW) / FREQ_STEP) + 1)  // 81
@@ -103,22 +113,24 @@ static float    xw[N];
 static float    mag[N_BINS];
 
 // ─── キャリブレーション状態 ────────────────────────────
-enum CalState : uint8_t { SCANNING = 0, CAL_PHASE = 1, TRACKING = 2 };
-static CalState calState        = SCANNING;
-static float    fc              = 1000.0f;  // キャリア周波数（スキャン後更新）
-static float    dphi0           = 0.0f;     // 静止時のΔφ（キャリア定常進み）
-static float    prev_phi        = 0.0f;
-static bool     prev_phi_valid  = false;
+enum CalState : uint8_t { SCANNING = 0, TRACKING = 2 };  // CAL_PHASE(1)廃止
+static CalState calState       = SCANNING;
+static float    fc             = 1000.0f;  // キャリア周波数（スキャン後更新）
+static float    prev_phi       = 0.0f;
+static bool     prev_phi_valid = false;
 
-static float    f_est           = 0.0f;   // PLL 推定周波数 [Hz]
-static bool     f_est_valid     = false;  // f_est 初期化済みフラグ
-static int      hold_count      = 0;      // 連続ホールドフレーム数
+// フレーム開始時刻（T_elapsed 計算用）
+static unsigned long prev_t0_us    = 0;
+static bool          prev_t0_valid = false;
+
+static float    f_est       = 0.0f;   // PLL 推定周波数 [Hz]（probe に使用）
+static bool     f_est_valid = false;  // f_est 初期化済みフラグ
+static int      hold_count  = 0;      // 連続ホールドフレーム数
+static float    nco_phase   = 0.0f;   // 連続 NCO 位相 [rad]
+static bool     nco_valid   = false;
 
 static float    fc_cands[N_CAL_SCAN];
-static int      fc_cand_count   = 0;
-
-static float    dphi_cands[N_CAL_PHASE];
-static int      dphi_cand_count = 0;
+static int      fc_cand_count = 0;
 
 
 // ─── ユーティリティ ────────────────────────────────────
@@ -173,16 +185,40 @@ static void goertzel_iq(float freq, float fs, float *I_out, float *Q_out) {
   *Q_out = (s2 * sinf(omega))       / hN;
 }
 
+// ─── 連続 NCO による IQ 検波（TRACKING専用）────────────
+// ブロック境界をまたいで位相基準を連続に保つことで、
+// 停止中に PLL が自己ドリフトするのを防ぐ。
+static void pll_iq_continuous(float freq, float fs, float *phase_io,
+                              float *I_out, float *Q_out) {
+  const float omega = 2.0f * (float)M_PI * freq / fs;
+  float phase = *phase_io;
+  float I = 0.0f, Q = 0.0f;
+
+  for (int i = 0; i < N; i++) {
+    I += xw[i] * cosf(phase);
+    Q += xw[i] * sinf(phase);
+    phase += omega;
+    if (phase >  (float)M_PI) phase -= 2.0f * (float)M_PI;
+    if (phase < -(float)M_PI) phase += 2.0f * (float)M_PI;
+  }
+
+  const float hN = N / 2.0f;
+  *I_out = I / hN;
+  *Q_out = Q / hN;
+  *phase_io = phase;
+}
+
 // ─── キャリブレーション初期化 ─────────────────────────
 static void start_recal() {
-  calState        = SCANNING;
-  fc              = 1000.0f;
-  dphi0           = 0.0f;
-  fc_cand_count   = 0;
-  dphi_cand_count = 0;
-  prev_phi_valid  = false;
-  f_est_valid     = false;
-  hold_count      = 0;
+  calState       = SCANNING;
+  fc             = 1000.0f;
+  fc_cand_count  = 0;
+  prev_phi_valid = false;
+  prev_t0_valid  = false;
+  f_est_valid    = false;
+  hold_count     = 0;
+  nco_phase      = 0.0f;
+  nco_valid      = false;
 }
 
 // ─── BLE コマンドコールバック ──────────────────────────
@@ -195,13 +231,16 @@ class CmdCallbacks : public NimBLECharacteristicCallbacks {
     } else if (strncmp(s, "FC:", 3) == 0) {
       const float f = atof(s + 3);
       if (f > 800.0f && f < 1200.0f) {
-        fc              = f;
-        calState        = CAL_PHASE;
-        dphi_cand_count = 0;
-        prev_phi_valid  = false;
-        f_est_valid     = false;
-        hold_count      = 0;
-        Serial.printf("[CMD] FC → %.3f Hz\n", fc);
+        fc             = f;
+        calState       = TRACKING;
+        prev_phi_valid = false;
+        prev_t0_valid  = false;
+        f_est          = f;    // probe を fc で初期化（stale 値を排除）
+        f_est_valid    = true;
+        hold_count     = 0;
+        nco_phase      = 0.0f;
+        nco_valid      = false;
+        Serial.printf("[CMD] FC → %.3f Hz  → TRACKING, f_est=fc\n", fc);
       }
     }
   }
@@ -211,9 +250,13 @@ class CmdCallbacks : public NimBLECharacteristicCallbacks {
 void setup() {
   Serial.begin(115200);
   delay(3000);
-  Serial.println("=== doppler-cart-phase v1 (Goertzel I/Q 位相追跡) ===");
-  Serial.printf("N=%d  N_CAL_SCAN=%d  N_CAL_PHASE=%d  N_BINS=%d\n",
-                N, N_CAL_SCAN, N_CAL_PHASE, N_BINS);
+  Serial.println("=== doppler-cart-phase v3 (真の PLL: Goertzel at f_est) ===");
+  Serial.printf("N=%d  N_CAL_SCAN=%d  N_BINS=%d  PLL_ALPHA=%.2f\n",
+                N, N_CAL_SCAN, N_BINS, PLL_ALPHA);
+#ifdef DEBUG_PHASE
+  Serial.println("[DBG] DEBUG_PHASE 有効: TRACKING中に毎フレームデバッグ出力");
+  Serial.println("[DBG] フォーマット: T probe phi p_hz i_hz fp amp");
+#endif
 
   analogReadResolution(12);
 
@@ -221,7 +264,6 @@ void setup() {
   for (int i = 0; i < N; i++)
     hann[i] = 0.5f * (1.0f - cosf(2.0f * (float)M_PI * i / (N - 1)));
 
-  // MTU を拡大してから init（46byte パケットに必要）
   NimBLEDevice::init("Doppler Phase Sensor");
   NimBLEDevice::setMTU(512);
 
@@ -252,7 +294,7 @@ void loop() {
   if (!connected && wasConnected) NimBLEDevice::startAdvertising();
   wasConnected = connected;
 
-  // ── 1. サンプリング（実測 fs）────────────────────────
+  // ── 1. サンプリング（実測 fs・フレーム開始時刻）──────
   const unsigned long t0 = micros();
   for (int i = 0; i < N; i++) raw[i] = analogRead(MIC_PIN);
   const unsigned long t1 = micros();
@@ -273,11 +315,11 @@ void loop() {
   for (int i = 0; i < N; i++)
     xw[i] = ((float)raw[i] - meanV) * hann[i];
 
-  // ── 4. 81点スキャン（SCANNING / CAL_PHASE のみ）──────────
+  // ── 4. 81点スキャン（SCANNING のみ）─────────────────
   float freq_scan = -1.0f;
   float amplitude  = -1.0f;
 
-  if (calState != TRACKING) {
+  if (calState == SCANNING) {
     for (int b = 0; b < N_BINS; b++)
       mag[b] = goertzel_mag(FREQ_LOW + b * FREQ_STEP, fs);
 
@@ -302,7 +344,7 @@ void loop() {
     }
   }
 
-  // ── 5. キャリブレーション / 位相追跡 ─────────────────
+  // ── 5. fc 決定 / PLL 追跡 ─────────────────────────────
 
   // SCANNING: 有効な freq_scan を蓄積し中央値から fc を決定
   if (calState == SCANNING) {
@@ -310,86 +352,98 @@ void loop() {
       fc_cands[fc_cand_count++] = freq_scan;
 
     if (fc_cand_count >= N_CAL_SCAN) {
-      fc              = median_f(fc_cands, N_CAL_SCAN);
-      calState        = CAL_PHASE;
-      dphi_cand_count = 0;
-      prev_phi_valid  = false;
-      Serial.printf("[CAL] fc = %.3f Hz  (ESP32 offset = %+.3f Hz)\n",
+      fc             = median_f(fc_cands, N_CAL_SCAN);
+      calState       = TRACKING;
+      prev_phi_valid = false;
+      prev_t0_valid  = false;
+      f_est          = fc;    // probe を fc で初期化（stale 値を排除）
+      f_est_valid    = true;
+      hold_count     = 0;
+      nco_phase      = 0.0f;
+      nco_valid      = false;
+      Serial.printf("[CAL] fc = %.3f Hz  (ESP32 offset = %+.3f Hz) → TRACKING, f_est=fc\n",
                     fc, fc - 1000.0f);
     }
   }
 
-  // CAL_PHASE / TRACKING: fc 点の I/Q を取得して位相を追跡
+  // TRACKING: Goertzel を f_est で計算する真の PLL
   float freq_phase = -1.0f;
 
-  if (calState == CAL_PHASE || calState == TRACKING) {
+  if (calState == TRACKING) {
+    // probe = 現在の推定値（未確定なら fc を初期値として使用）
+    const float probe = f_est_valid ? f_est : fc;
+
     float I_fc, Q_fc;
-    goertzel_iq(fc, fs, &I_fc, &Q_fc);
+    if (!nco_valid) {
+      nco_phase = 0.0f;
+      nco_valid = true;
+    }
+    pll_iq_continuous(probe, fs, &nco_phase, &I_fc, &Q_fc);
     const float amp_fc = sqrtf(I_fc * I_fc + Q_fc * Q_fc);
-    if (calState == TRACKING) amplitude = amp_fc;  // BLE用振幅をIQ由来に切り替え
+    amplitude = amp_fc;
 
     if (amp_fc >= AMPLITUDE_MIN_PHASE) {
+      // 連続 NCO 基準に対する位相誤差。停止中は 0 近傍に留まるべき。
       const float phi = atan2f(Q_fc, I_fc);
 
-      if (calState == CAL_PHASE) {
-        // Δφ = wrap_pi(φ_new - φ_prev) を蓄積
-        if (prev_phi_valid && dphi_cand_count < N_CAL_PHASE)
-          dphi_cands[dphi_cand_count++] = wrap_pi(phi - prev_phi);
+      if (prev_phi_valid && prev_t0_valid) {
+        const float T_el = (t0 - prev_t0_us) * 1e-6f;
 
-        prev_phi       = phi;
-        prev_phi_valid = true;
+        if (T_el >= 0.01f && T_el <= 0.5f) {
+          // dphi = フレーム間の位相差 ≈ 2π×(f_signal - probe)×T_el
+          const float dphi = wrap_pi(phi - prev_phi);
+          const float freq_error = dphi / (2.0f * (float)M_PI * T_el);
 
-        if (dphi_cand_count >= N_CAL_PHASE) {
-          dphi0       = median_f(dphi_cands, N_CAL_PHASE);
-          calState    = TRACKING;
-          f_est       = fc;
-          f_est_valid = false;
-          hold_count  = 0;
-          Serial.printf("[CAL] Δφ₀ = %.5f rad  (%.3f Hz)\n",
-                        dphi0, dphi0 * (fs / N) / (2.0f * (float)M_PI));
-        }
-
-      } else {  // TRACKING
-        if (prev_phi_valid) {
-          const float dDphi = wrap_pi(wrap_pi(phi - prev_phi) - dphi0);
-          freq_phase = fc + dDphi * (fs / N) / (2.0f * (float)M_PI);
-          // PLL 更新（IIR）
-          if (!f_est_valid) {
-            f_est       = freq_phase;
-            f_est_valid = true;
-          } else {
-            f_est = PLL_ALPHA * freq_phase + (1.0f - PLL_ALPHA) * f_est;
-          }
+          freq_phase = probe + freq_error;
+          f_est = probe + PLL_ALPHA * freq_error;  // IIR: f_est += α×freq_error
+          f_est_valid = true;
           hold_count = 0;
+
+#ifdef DEBUG_PHASE
+          Serial.printf("[PHZ] T=%.4f probe=%.3f dphi=%.4f err=%.3f fp=%.3f amp=%.1f\n",
+                        T_el, probe, dphi, freq_error, freq_phase, amp_fc);
+#endif
         } else {
-          // チェーン破断（前フレーム無効）→ ホールド
-          freq_phase = -1.0f;
+          // 異常なフレーム間隔（BLE 処理遅延など）→ チェーンリセット
+          Serial.printf("[PLL] abnormal T_el=%.4f → skip\n", T_el);
+          prev_phi_valid = false;
+          prev_t0_valid  = false;
+          nco_valid      = false;
           hold_count++;
         }
-        prev_phi       = phi;
-        prev_phi_valid = true;
+      } else {
+        // チェーン初期フレーム → ホールド
+        hold_count++;
       }
 
+      prev_phi       = phi;
+      prev_phi_valid = true;
+
     } else {
-      // フェード（amp < 閾値）→ 次回の位相差を無効化、TRACKING 中はホールドカウント
+      // フェード（amp < 閾値）→ チェーン破断
       prev_phi_valid = false;
-      if (calState == TRACKING) hold_count++;
+      nco_valid      = false;
+      hold_count++;
     }
 
-    // フェード回復: HOLD_MAX 連続ホールドでも CAL_PHASE には戻らず
-    // φ チェーンをリセットして f_est をホールドしたまま追跡継続
-    if (calState == TRACKING && hold_count >= HOLD_MAX) {
+    // HOLD_MAX 超過 → φ チェーンリセット、f_est はホールド継続
+    if (hold_count >= HOLD_MAX) {
       prev_phi_valid = false;
+      prev_t0_valid  = false;
+      nco_valid      = false;
       hold_count     = 0;
       Serial.println("[PLL] fade: reset phi chain, hold f_est");
     }
+
+    // フレーム開始時刻を次フレーム用に保存
+    prev_t0_us    = t0;
+    prev_t0_valid = true;
   }
 
   // ── 6. BLE 送信 ──────────────────────────────────────
-  const float t_s    = micros() * 1e-6f;
-  const int   stat   = (int)calState;
-  const int   cprog  = (calState == SCANNING)  ? fc_cand_count  :
-                       (calState == CAL_PHASE)  ? dphi_cand_count : 0;
+  const float t_s   = micros() * 1e-6f;
+  const int   stat  = (int)calState;
+  const int   cprog = (calState == SCANNING) ? fc_cand_count : 0;
 
   const float freq_pll = f_est_valid ? f_est : -1.0f;
   char msg[96];

@@ -499,8 +499,10 @@ let freqSession = [];
 let posValues       = [];
 let velValues       = [];
 let velSmoothValues = [];
+let posTimeValues   = [];   // elapsed_s parallel to posValues
 // freqDualValues entry: { scan: float|null, phase: float|null }
 let freqDualValues  = [];
+let freqTimeValues  = [];   // elapsed_s parallel to freqDualValues
 
 let scanAmpThreshold  = 100;
 let phaseAmpThreshold = 10;
@@ -785,7 +787,8 @@ function onFreqNotify(event) {
 
   // 表示用デュアルバッファに追加
   freqDualValues.push(buildDualPoint(sample));
-  if (freqDualValues.length > MAX_POINTS) freqDualValues.shift();
+  freqTimeValues.push(sample.elapsed_s);
+  if (freqDualValues.length > MAX_POINTS) { freqDualValues.shift(); freqTimeValues.shift(); }
 
   // TRACKING到達後に、静止時に近い点だけで Δφ₀ 等価Hz を推定
   if (status === 2) {
@@ -793,7 +796,7 @@ function onFreqNotify(event) {
     if (offsetHz !== null) lastDphi0Hz = offsetHz;
   }
 
-  drawFreqDualChart(ctxFreq, freqDualValues, document.getElementById('freqAxisLabel'));
+  drawFreqDualChart(ctxFreq, freqDualValues, freqTimeValues, document.getElementById('freqAxisLabel'));
   updateStats();
 }
 
@@ -815,15 +818,16 @@ function sampleTick() {
 
   posValues.push(pos);
   velValues.push(vel);
+  posTimeValues.push(elapsed_s);
   const sliceV = velValues.slice(Math.max(0, velValues.length - VEL_SMOOTH_WIN));
   velSmoothValues.push(sliceV.reduce((a, b) => a + b, 0) / sliceV.length);
   if (posValues.length > MAX_POINTS) {
-    posValues.shift(); velValues.shift(); velSmoothValues.shift();
+    posValues.shift(); velValues.shift(); velSmoothValues.shift(); posTimeValues.shift();
   }
 
   updateStats();
-  drawChart(ctxPos, posValues, '#0077cc', document.getElementById('posAxisLabel'), 'm');
-  drawVelChart(ctxVel, velValues, velSmoothValues, document.getElementById('velAxisLabel'));
+  drawChart(ctxPos, posValues, '#0077cc', posTimeValues, document.getElementById('posAxisLabel'), 'm');
+  drawVelChart(ctxVel, velValues, velSmoothValues, posTimeValues, document.getElementById('velAxisLabel'));
 }
 
 // ═══════════════════════════════════════════════════════
@@ -837,7 +841,42 @@ const ctxScatter = document.getElementById('chartScatter').getContext('2d');
 // ═══════════════════════════════════════════════════════
 //  汎用単一線チャート
 // ═══════════════════════════════════════════════════════
-function drawChart(ctx, data, color, labelEl, unit) {
+//  時間軸（秒刻みtick + ラベル）共通ヘルパー
+// ═══════════════════════════════════════════════════════
+function drawTimeAxis(ctx, times, PAD_L, PAD_T, plotW, plotH) {
+  if (!times || times.length < 2) return;
+  const tMin = times[0], tMax = times[times.length - 1];
+  if (tMax <= tMin) return;
+  const toX = t => PAD_L + (t - tMin) / (tMax - tMin) * plotW;
+
+  // 刻み幅: ~5–8本になるよう選択
+  const span = tMax - tMin;
+  const steps = [0.5, 1, 2, 5, 10, 20, 30, 60];
+  const step = steps.find(s => span / s <= 8) || 60;
+
+  const yBase = PAD_T + plotH;
+  ctx.save();
+  ctx.strokeStyle = 'rgba(100,120,140,0.6)';
+  ctx.fillStyle = '#6b8099';
+  ctx.font = '10px "Share Tech Mono",monospace';
+  ctx.textAlign = 'center';
+  ctx.lineWidth = 1;
+
+  const s0 = Math.ceil(tMin / step) * step;
+  for (let s = s0; s <= tMax + 1e-9; s += step) {
+    const x = toX(s);
+    ctx.beginPath(); ctx.moveTo(x, yBase); ctx.lineTo(x, yBase + 5); ctx.stroke();
+    ctx.fillText((Number.isInteger(step) ? s.toFixed(0) : s.toFixed(1)) + 's', x, yBase + 15);
+  }
+
+  // 軸線
+  ctx.strokeStyle = 'rgba(100,120,140,0.3)';
+  ctx.beginPath(); ctx.moveTo(PAD_L, yBase); ctx.lineTo(PAD_L + plotW, yBase); ctx.stroke();
+  ctx.restore();
+}
+
+// ═══════════════════════════════════════════════════════
+function drawChart(ctx, data, color, times, labelEl, unit) {
   const W = ctx.canvas.width, H = ctx.canvas.height;
   ctx.clearRect(0, 0, W, H);
   ctx.fillStyle = '#f8fbff'; ctx.fillRect(0, 0, W, H);
@@ -849,7 +888,9 @@ function drawChart(ctx, data, color, labelEl, unit) {
   if (Math.abs(max - min) < 0.001) { min -= 0.1; max += 0.1; }
   const range = max - min;
   const toY = v => PAD_T + plotH - ((v - min) / range) * plotH;
-  const toX = i => PAD_L + (i / (data.length - 1)) * plotW;
+  const useTimes = times && times.length === data.length && times[times.length - 1] > times[0];
+  const tMin = useTimes ? times[0] : 0, tMax = useTimes ? times[times.length - 1] : data.length - 1;
+  const toX = i => PAD_L + ((useTimes ? times[i] : i) - tMin) / (tMax - tMin) * plotW;
 
   ctx.strokeStyle = 'rgba(160,185,210,0.5)'; ctx.lineWidth = 1;
   for (let k = 0; k <= 4; k++) {
@@ -873,6 +914,7 @@ function drawChart(ctx, data, color, labelEl, unit) {
   ctx.fillStyle = color; ctx.beginPath();
   ctx.arc(toX(data.length - 1), toY(data[data.length - 1]), 4, 0, Math.PI * 2);
   ctx.fill();
+  if (useTimes) drawTimeAxis(ctx, times, PAD_L, PAD_T, plotW, plotH);
   if (labelEl) {
     const dec = unit === 'Hz' ? 2 : 3;
     labelEl.textContent = `min ${min.toFixed(dec)} / max ${max.toFixed(dec)} ${unit}`;
@@ -882,7 +924,7 @@ function drawChart(ctx, data, color, labelEl, unit) {
 // ═══════════════════════════════════════════════════════
 //  速度チャート（raw 薄線 + 5点平均 主線）
 // ═══════════════════════════════════════════════════════
-function drawVelChart(ctx, rawData, smoothData, labelEl) {
+function drawVelChart(ctx, rawData, smoothData, times, labelEl) {
   const W = ctx.canvas.width, H = ctx.canvas.height;
   ctx.clearRect(0, 0, W, H); ctx.fillStyle = '#f8fbff'; ctx.fillRect(0, 0, W, H);
   if (rawData.length < 2) return;
@@ -894,7 +936,9 @@ function drawVelChart(ctx, rawData, smoothData, labelEl) {
   if (Math.abs(max - min) < 0.001) { min -= 0.1; max += 0.1; }
   const range = max - min;
   const toY = v => PAD_T + plotH - ((v - min) / range) * plotH;
-  const toX = i => PAD_L + (i / (rawData.length - 1)) * plotW;
+  const useTimes = times && times.length === rawData.length && times[times.length - 1] > times[0];
+  const tMin = useTimes ? times[0] : 0, tMax = useTimes ? times[times.length - 1] : rawData.length - 1;
+  const toX = i => PAD_L + ((useTimes ? times[i] : i) - tMin) / (tMax - tMin) * plotW;
 
   ctx.strokeStyle = 'rgba(160,185,210,0.5)'; ctx.lineWidth = 1;
   for (let k = 0; k <= 4; k++) {
@@ -926,6 +970,7 @@ function drawVelChart(ctx, rawData, smoothData, labelEl) {
     ctx.arc(toX(smoothData.length - 1), toY(smoothData[smoothData.length - 1]), 4, 0, Math.PI * 2);
     ctx.fill();
   }
+  if (useTimes) drawTimeAxis(ctx, times, PAD_L, PAD_T, plotW, plotH);
   if (labelEl) {
     const vLast = smoothData.length > 0 ? smoothData[smoothData.length - 1] : rawData[rawData.length - 1];
     labelEl.textContent = `last(avg) ${vLast.toFixed(3)} m/s  |  min ${min.toFixed(3)} / max ${max.toFixed(3)} m/s`;
@@ -935,7 +980,7 @@ function drawVelChart(ctx, rawData, smoothData, labelEl) {
 // ═══════════════════════════════════════════════════════
 //  周波数デュアルチャート（スキャン法 + 位相追跡法）
 // ═══════════════════════════════════════════════════════
-function drawFreqDualChart(ctx, dualData, labelEl) {
+function drawFreqDualChart(ctx, dualData, times, labelEl) {
   const W = ctx.canvas.width, H = ctx.canvas.height;
   ctx.clearRect(0, 0, W, H); ctx.fillStyle = '#f8fbff'; ctx.fillRect(0, 0, W, H);
   if (dualData.length < 2) return;
@@ -943,7 +988,9 @@ function drawFreqDualChart(ctx, dualData, labelEl) {
   const PAD_L = 62, PAD_R = 12, PAD_T = 16, PAD_B = 28;
   const plotW = W - PAD_L - PAD_R, plotH = H - PAD_T - PAD_B;
   const n = dualData.length;
-  const toX = i => PAD_L + (i / (n - 1)) * plotW;
+  const useTimes = times && times.length === n && times[n - 1] > times[0];
+  const tMin = useTimes ? times[0] : 0, tMax = useTimes ? times[n - 1] : n - 1;
+  const toX = i => PAD_L + ((useTimes ? times[i] : i) - tMin) / (tMax - tMin) * plotW;
 
   // Y 軸範囲: 両系列の有効値から決定
   const allVals = [];
@@ -1050,6 +1097,7 @@ function drawFreqDualChart(ctx, dualData, labelEl) {
     }
   }
 
+  if (useTimes) drawTimeAxis(ctx, times, PAD_L, PAD_T, plotW, plotH);
   if (labelEl) {
     labelEl.textContent = `min ${min.toFixed(2)} / max ${max.toFixed(2)} Hz`;
   }
@@ -1443,7 +1491,8 @@ function resetAll() {
   }
   prevFreqEspTime = -1; firstFreqEspTime = -1;
   posSession = []; freqSession = [];
-  posValues = []; velValues = []; velSmoothValues = []; freqDualValues = [];
+  posValues = []; velValues = []; velSmoothValues = []; posTimeValues = [];
+  freqDualValues = []; freqTimeValues = [];
   lastDphi0Hz = null;
   ['sPosLast','sVelLast','sFreqScan','sFreqPhase','sAmplitude','sFreqPll'].forEach(id => {
     const el = document.getElementById(id);
@@ -1571,9 +1620,9 @@ document.getElementById('btnDownload').addEventListener('click', () => {
 function resizeCanvases() {
   for (const ctx of [ctxPos, ctxVel, ctxFreq, ctxScatter])
     ctx.canvas.width = ctx.canvas.parentElement.clientWidth - 36;
-  drawChart(ctxPos, posValues, '#0077cc', document.getElementById('posAxisLabel'), 'm');
-  drawVelChart(ctxVel, velValues, velSmoothValues, document.getElementById('velAxisLabel'));
-  drawFreqDualChart(ctxFreq, freqDualValues, document.getElementById('freqAxisLabel'));
+  drawChart(ctxPos, posValues, '#0077cc', posTimeValues, document.getElementById('posAxisLabel'), 'm');
+  drawVelChart(ctxVel, velValues, velSmoothValues, posTimeValues, document.getElementById('velAxisLabel'));
+  drawFreqDualChart(ctxFreq, freqDualValues, freqTimeValues, document.getElementById('freqAxisLabel'));
   drawScatter();
 }
 window.addEventListener('resize', resizeCanvases);
@@ -1581,14 +1630,16 @@ resizeCanvases();
 
 // ─── 振幅スライダー ─────────────────────────────────
 function rebuildFreqDualValues() {
-  freqDualValues = freqSession.slice(-MAX_POINTS).map(buildDualPoint);
+  const slice = freqSession.slice(-MAX_POINTS);
+  freqDualValues = slice.map(buildDualPoint);
+  freqTimeValues = slice.map(s => s.elapsed_s);
 }
 
 document.getElementById('scanAmpSlider').addEventListener('input', function () {
   scanAmpThreshold = parseInt(this.value, 10);
   document.getElementById('scanAmpSliderVal').textContent = scanAmpThreshold;
   rebuildFreqDualValues();
-  drawFreqDualChart(ctxFreq, freqDualValues, document.getElementById('freqAxisLabel'));
+  drawFreqDualChart(ctxFreq, freqDualValues, freqTimeValues, document.getElementById('freqAxisLabel'));
   drawScatter();
   updateStats();
 });
@@ -1599,7 +1650,7 @@ document.getElementById('phaseAmpSlider').addEventListener('input', function () 
   rebuildFreqDualValues();
   lastDphi0Hz = estimateStaticPhaseOffsetHz();
   updateCalPanel();
-  drawFreqDualChart(ctxFreq, freqDualValues, document.getElementById('freqAxisLabel'));
+  drawFreqDualChart(ctxFreq, freqDualValues, freqTimeValues, document.getElementById('freqAxisLabel'));
   drawScatter();
   updateStats();
 });
@@ -1607,7 +1658,7 @@ document.getElementById('phaseAmpSlider').addEventListener('input', function () 
 // ─── スキャン法表示トグル ────────────────────────────
 document.getElementById('chkShowScan').addEventListener('change', function () {
   showScan = this.checked;
-  drawFreqDualChart(ctxFreq, freqDualValues, document.getElementById('freqAxisLabel'));
+  drawFreqDualChart(ctxFreq, freqDualValues, freqTimeValues, document.getElementById('freqAxisLabel'));
   drawScatter();
 });
 
