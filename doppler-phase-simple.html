@@ -26,17 +26,15 @@
     --header-bg: rgba(240,244,248,0.95);
     --grid-line: rgba(0,80,160,0.04);
 
-    --col-pos:   #0077cc;
-    --col-vel:   #4a8c00;
-    --col-scan:  #b06000;   /* スキャン法: 薄い橙 */
-    --col-phase: #0044cc;   /* 位相追跡法: 青 */
-    --col-pll:   #aa0077;   /* PLL 推定: 紫 */
-    --danger:    #d42045;
-    --warn:      #b86e00;
-    --accent2:   #008855;
-    --cal-scan:  #b86e00;
+    --col-pos:       #0077cc;
+    --col-vel:       #4a8c00;
+    --col-phase:     #0044cc;
+    --col-pll:       #aa0077;
+    --danger:        #d42045;
+    --warn:          #b86e00;
+    --accent2:       #008855;
     --cal-phase-col: #0066cc;
-    --cal-track: #008855;
+    --cal-track:     #008855;
   }
 
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -90,9 +88,9 @@
     transition: all 0.2s; background: transparent;
   }
   button:disabled { opacity: 0.35; cursor: not-allowed; }
-  .btn-connect-cart  { border-color: var(--col-pos);   color: var(--col-pos); }
+  .btn-connect-cart { border-color: var(--col-pos);   color: var(--col-pos); }
   .btn-connect-cart:hover:not(:disabled) { background: var(--col-pos); color: #fff; }
-  .btn-connect-freq  { border-color: var(--col-phase); color: var(--col-phase); }
+  .btn-connect-freq { border-color: var(--col-phase); color: var(--col-phase); }
   .btn-connect-freq:hover:not(:disabled) { background: var(--col-phase); color: #fff; }
   .btn-start { border-color: var(--accent2); color: var(--accent2); }
   .btn-start:hover:not(:disabled) { background: var(--accent2); color: #fff; }
@@ -102,19 +100,18 @@
   .btn-reset:hover:not(:disabled) { background: var(--dim);     color: #fff; }
   .btn-csv   { border-color: var(--warn);    color: var(--warn); margin-left: auto; }
   .btn-csv:hover:not(:disabled)   { background: var(--warn);    color: #fff; }
-  .btn-recal { border-color: var(--cal-scan); color: var(--cal-scan); }
-  .btn-recal:hover:not(:disabled) { background: var(--cal-scan); color: #fff; }
+  .btn-recal { border-color: var(--warn);    color: var(--warn); }
+  .btn-recal:hover:not(:disabled) { background: var(--warn);    color: #fff; }
   .btn-setfc { border-color: var(--col-phase); color: var(--col-phase); padding: 9px 14px; }
   .btn-setfc:hover:not(:disabled) { background: var(--col-phase); color: #fff; }
 
   /* ─── キャリブレーションパネル ─────────────── */
   .cal-panel {
     background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
-    padding: 14px 18px; border-left: 4px solid var(--cal-scan);
+    padding: 14px 18px; border-left: 4px solid var(--border);
     transition: border-left-color 0.4s;
   }
-  .cal-panel.cal-phase-state { border-left-color: var(--cal-phase-col); }
-  .cal-panel.tracking-state  { border-left-color: var(--cal-track); }
+  .cal-panel.tracking-state { border-left-color: var(--cal-track); }
 
   .cal-header {
     display: flex; align-items: center; justify-content: space-between;
@@ -128,14 +125,10 @@
     display: inline-flex; align-items: center; gap: 6px;
     font-family: 'Share Tech Mono', monospace; font-size: 0.82rem; font-weight: 600;
     padding: 3px 10px; border-radius: 12px; white-space: nowrap;
-    background: rgba(184,110,0,0.1); color: var(--cal-scan);
+    background: rgba(184,110,0,0.1); color: var(--warn);
   }
-  .cal-state-badge.cal-phase-state { background: rgba(0,102,204,0.1); color: var(--cal-phase-col); }
-  .cal-state-badge.tracking-state  { background: rgba(0,136,85,0.1);  color: var(--cal-track); }
-  .cal-dot {
-    width: 7px; height: 7px; border-radius: 50%;
-    background: currentColor; flex-shrink: 0;
-  }
+  .cal-state-badge.tracking-state { background: rgba(0,136,85,0.1); color: var(--cal-track); }
+  .cal-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
   .cal-dot.blink { animation: pulse 1s infinite; }
 
   .cal-body { display: flex; gap: 20px; align-items: center; flex-wrap: wrap; }
@@ -143,8 +136,8 @@
     font-family: 'Share Tech Mono', monospace; font-size: 0.85rem;
     display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 220px;
   }
-  .cal-fc-val   { color: var(--col-phase); font-size: 1.05rem; font-weight: 600; }
-  .cal-offset   { font-size: 0.75rem; color: var(--dim); }
+  .cal-fc-val { color: var(--col-phase); font-size: 1.05rem; font-weight: 600; }
+  .cal-offset { font-size: 0.75rem; color: var(--dim); }
 
   .cal-progress-wrap { flex: 2; min-width: 200px; }
   .cal-progress-label {
@@ -156,11 +149,10 @@
     height: 8px; background: rgba(0,80,160,0.1); border-radius: 4px; overflow: hidden;
   }
   .cal-progress-fill {
-    height: 100%; background: var(--cal-scan); border-radius: 4px;
+    height: 100%; background: var(--border); border-radius: 4px;
     transition: width 0.25s, background 0.4s; width: 0%;
   }
-  .cal-progress-fill.cal-phase-state { background: var(--cal-phase-col); }
-  .cal-progress-fill.tracking-state  { background: var(--cal-track); }
+  .cal-progress-fill.tracking-state { background: var(--cal-track); }
 
   .cal-controls {
     display: flex; gap: 8px; align-items: center; flex-wrap: wrap; flex-shrink: 0;
@@ -168,13 +160,12 @@
   .fc-input {
     font-family: 'Share Tech Mono', monospace; font-size: 0.82rem;
     width: 80px; padding: 7px 10px; border: 1px solid var(--border);
-    border-radius: 4px; background: var(--bg); color: var(--text);
-    text-align: right;
+    border-radius: 4px; background: var(--bg); color: var(--text); text-align: right;
   }
   .fc-input:focus { outline: none; border-color: var(--col-phase); }
 
   /* ─── Stats row ─────────────────────────────────── */
-  .stats-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .stats-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
   @media (max-width: 700px) { .stats-row { grid-template-columns: repeat(2, 1fr); } }
   .stat-card {
     background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
@@ -182,7 +173,6 @@
   }
   .stat-card.pos   { border-left: 3px solid var(--col-pos); }
   .stat-card.vel   { border-left: 3px solid var(--col-vel); }
-  .stat-card.scan  { border-left: 3px solid var(--col-scan); }
   .stat-card.phase { border-left: 3px solid var(--col-phase); }
   .stat-label { font-size: 0.65rem; text-transform: uppercase; color: var(--dim); margin-bottom: 4px; }
   .stat-value { font-family: 'Share Tech Mono', monospace; font-size: 1.4rem; }
@@ -193,9 +183,9 @@
     background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
     padding: 16px 18px;
   }
-  .chart-panel.pos   { border-top: 2px solid var(--col-pos); }
-  .chart-panel.vel   { border-top: 2px solid var(--col-vel); }
-  .chart-panel.freq  { border-top: 2px solid var(--col-phase); }
+  .chart-panel.pos  { border-top: 2px solid var(--col-pos); }
+  .chart-panel.vel  { border-top: 2px solid var(--col-vel); }
+  .chart-panel.freq { border-top: 2px solid var(--col-phase); }
   .chart-header {
     display: flex; justify-content: space-between; align-items: baseline;
     margin-bottom: 12px; gap: 10px; flex-wrap: wrap;
@@ -210,13 +200,9 @@
     vertical-align: middle; margin-right: 4px;
   }
   .shared-time-axis {
-    font-family: 'Share Tech Mono', monospace;
-    font-size: 0.72rem;
-    color: var(--dim);
-    text-align: center;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    margin-top: -6px;
+    font-family: 'Share Tech Mono', monospace; font-size: 0.72rem;
+    color: var(--dim); text-align: center; letter-spacing: 0.08em;
+    text-transform: uppercase; margin-top: -6px;
   }
 
   /* ─── Modal ──────────────────────────────────────── */
@@ -262,20 +248,10 @@
     <button class="btn-reset" id="btnReset" disabled>Reset</button>
     <button class="btn-csv"   id="btnCsv"   disabled>CSV Export</button>
     <label style="display:flex;align-items:center;gap:7px;font-size:0.78rem;color:var(--dim);margin-left:10px;">
-      Scan Amp ≥
-      <input type="range" id="scanAmpSlider" min="0" max="500" step="10" value="100"
-             style="width:80px;accent-color:var(--col-scan);">
-      <span id="scanAmpSliderVal" style="font-family:'Share Tech Mono',monospace;min-width:2.5em;">100</span>
-    </label>
-    <label style="display:flex;align-items:center;gap:7px;font-size:0.78rem;color:var(--dim);margin-left:2px;">
       Phase Amp ≥
       <input type="range" id="phaseAmpSlider" min="0" max="100" step="1" value="18"
              style="width:80px;accent-color:var(--col-phase);">
       <span id="phaseAmpSliderVal" style="font-family:'Share Tech Mono',monospace;min-width:2.5em;">18</span>
-    </label>
-    <label style="display:flex;align-items:center;gap:6px;font-size:0.78rem;color:var(--dim);margin-left:6px;">
-      <input type="checkbox" id="chkShowScan" checked style="accent-color:var(--col-scan);">
-      <span style="color:var(--col-scan);">スキャン法表示</span>
     </label>
   </div>
 
@@ -290,9 +266,7 @@
     </div>
     <div class="cal-body">
       <div class="cal-info">
-        <div>
-          <span class="cal-fc-val" id="calFcVal">f_c = —</span>
-        </div>
+        <div><span class="cal-fc-val" id="calFcVal">f_c(ref) = —</span></div>
         <div class="cal-offset" id="calOffsetVal"></div>
         <div class="cal-offset" id="calDphi0Val"></div>
       </div>
@@ -309,7 +283,7 @@
         <button class="btn-recal" id="btnRecal" disabled>Reset To 1000</button>
         <input type="number" class="fc-input" id="fcInput" placeholder="f_c Hz"
                min="800" max="1200" step="0.1" title="キャリア周波数を手動設定">
-        <button class="btn-setfc" id="btnSetFc" disabled title="手動 f_c を送信して再キャリブレーション">Set f_c</button>
+        <button class="btn-setfc" id="btnSetFc" disabled title="手動 f_c を送信して再初期化">Set f_c</button>
       </div>
     </div>
   </div>
@@ -323,10 +297,6 @@
     <div class="stat-card vel">
       <div class="stat-label">Velocity</div>
       <div class="stat-value" id="sVelLast">—</div>
-    </div>
-    <div class="stat-card scan">
-      <div class="stat-label">Freq — スキャン法</div>
-      <div class="stat-value" id="sFreqScan">—</div>
     </div>
     <div class="stat-card phase">
       <div class="stat-label">Freq — 位相追跡法 / PLL</div>
@@ -370,7 +340,6 @@
       <div class="chart-header">
         <div class="chart-title">Frequency (Hz)</div>
         <div class="freq-legend">
-          <span><span class="legend-dot" style="background:rgba(176,96,0,0.5);"></span>スキャン法</span>
           <span><span class="legend-dot" style="background:var(--col-phase);"></span>位相追跡法</span>
           <span><span class="legend-dot" style="background:var(--col-pll);"></span>PLL</span>
         </div>
@@ -415,8 +384,8 @@
     <div class="modal-footer">
       <span id="csvRowCount" style="font-size:0.75rem; color:var(--dim);"></span>
       <div style="display:flex; gap:8px;">
-        <button class="btn-reset"  id="btnCopy">Copy</button>
-        <button class="btn-csv"    id="btnDownload">Download</button>
+        <button class="btn-reset" id="btnCopy">Copy</button>
+        <button class="btn-csv"   id="btnDownload">Download</button>
       </div>
     </div>
   </div>
@@ -427,7 +396,6 @@
 //  定数
 // ═══════════════════════════════════════════════════════
 
-// PASCO Smart Cart UUIDs
 const ALL_PASCO_UUIDS = [];
 for (let s = 0; s <= 9; s++) {
   ALL_PASCO_UUIDS.push(`4a5c000${s}-0000-0000-0000-5c1e741f1c00`);
@@ -440,18 +408,11 @@ const POSITION_SERVICE  = '4a5c0003-0000-0000-0000-5c1e741f1c00';
 const POSITION_CMD_CHAR = '4a5c0003-0002-0000-0000-5c1e741f1c00';
 const POSITION_ACK_CHAR = '4a5c0003-0005-0000-0000-5c1e741f1c00';
 
-const POS_SCALE          = 0.09895 / 816;
-const SAMPLE_INTERVAL_MS = 55;
-const MAX_POINTS         = 300;
-
-// BLE notify 受信時刻 − SAMPLING_TAIL_MS ≈ サンプリング窓中央（tFreq）
-// N=800:  窓後半(≈28ms) + Goertzel+BLE(≈9ms) ≈ 37ms
+const POS_SCALE             = 0.09895 / 816;
+const SAMPLE_INTERVAL_MS    = 55;
+const MAX_POINTS            = 300;
 const SAMPLING_TAIL_MS      = 37;
 const FREQ_GAP_THRESHOLD_MS = 180;
-
-// Arduino 側と合わせる（進捗バー計算用）
-const N_CAL_SCAN  = 50;
-const N_CAL_PHASE = 20;
 
 // ═══════════════════════════════════════════════════════
 //  Smart Cart 状態
@@ -461,40 +422,34 @@ let posCmdChar        = null;
 let posAckChar        = null;
 let isCartConnected   = false;
 
-let countAccumulated  = 0;
-let lastPacketSeq     = -1;
-let latestPosition    = 0;
-let latestVelocity    = 0;
-let notifyReceived    = false;
-let lastNotifyTime    = 0;
-let lastNotifyPos     = 0;
-let notifyPacketCount = 0;
-let postResetGuard       = 0;    // リセット直後の大ジャンプを捨てるパケット数
-let lastPositionNotifyMs = 0;    // 最後の位置 notify 受信時刻（stale 検出用）
-
-// JS 側安全網（ファームウェア更新前の旧機との互換）
-let lastValidFreqScan = -1;
-let jsScanMissCount   = 0;
+let countAccumulated     = 0;
+let lastPacketSeq        = -1;
+let latestPosition       = 0;
+let latestVelocity       = 0;
+let notifyReceived       = false;
+let lastNotifyTime       = 0;
+let lastNotifyPos        = 0;
+let notifyPacketCount    = 0;
+let postResetGuard       = 0;
+let lastPositionNotifyMs = 0;
 
 // ═══════════════════════════════════════════════════════
 //  Freq Sensor (ESP32) 状態
 // ═══════════════════════════════════════════════════════
-let freqDevice       = null;
-let freqChar         = null;
-let pCmdChar         = null;   // コマンド送信用 (0x2A59)
-let isFreqConnected  = false;
-let prevFreqEspTime  = -1;
-let firstFreqEspTime = -1;
-let firstFreqRecvMs  = -1;
+let freqDevice        = null;
+let freqChar          = null;
+let pCmdChar          = null;
+let isFreqConnected   = false;
+let prevFreqEspTime   = -1;
+let firstFreqEspTime  = -1;
+let firstFreqRecvMs   = -1;
 let timeAlignOffsetMs = SAMPLING_TAIL_MS;
-let derivedFc        = null;
-let derivedFcLocked  = false;
+let derivedFc         = null;
+let derivedFcLocked   = false;
 
-// キャリブレーション状態（Arduino から通知される）
-let lastCalStatus   = -1;   // -1=未接続, 0=SCANNING, 1=CAL_PHASE, 2=TRACKING
+let lastCalStatus   = -1;   // -1=未接続, 2=TRACKING
 let lastFc          = 1000.0;
 let lastCalProgress = 0;
-let lastDphi0Hz     = null; // Δφ₀ 由来の Hz 値（CAL_PHASE 完了時に推定）
 
 // ═══════════════════════════════════════════════════════
 //  録画状態
@@ -507,42 +462,29 @@ let samplerTimerId  = null;
 //  データバッファ
 // ═══════════════════════════════════════════════════════
 let posSession  = [];
-// freqSession entry: { t_true_ms, elapsed_s, freq_scan, freq_phase, amplitude, status, fc, gap_ok }
 let freqSession = [];
 
-// 表示用ローリングバッファ
 let posValues       = [];
 let velValues       = [];
 let velSmoothValues = [];
-let posTimeValues   = [];   // elapsed_s parallel to posValues
-// freqDualValues entry: { scan: float|null, phase: float|null }
+let posTimeValues   = [];
 let freqDualValues  = [];
-let freqTimeValues  = [];   // elapsed_s parallel to freqDualValues
+let freqTimeValues  = [];
 
-let scanAmpThreshold  = 100;
 let phaseAmpThreshold = 18;
-let showScan          = true;
-const VEL_SMOOTH_WIN = 5;
+const VEL_SMOOTH_WIN  = 5;
 
+// ═══════════════════════════════════════════════════════
+//  ユーティリティ
+// ═══════════════════════════════════════════════════════
 function medianOf(values) {
   if (!values || values.length === 0) return null;
   const sorted = [...values].sort((a, b) => a - b);
   return sorted[Math.floor(sorted.length / 2)];
 }
 
-function getStatusLabel(status) {
-  if (status === 0) return 'SCANNING';
-  if (status === 1) return 'PHASE CAL';
-  if (status === 2) return 'TRACKING';
-  return 'UNKNOWN';
-}
-
 function getReferenceFc() {
   return derivedFc !== null ? derivedFc : lastFc;
-}
-
-function isScanPointUsable(f) {
-  return !!f && f.gap_ok && f.freq_scan > 0 && f.amplitude >= scanAmpThreshold;
 }
 
 function isPhasePointUsable(f) {
@@ -551,7 +493,6 @@ function isPhasePointUsable(f) {
 
 function buildDualPoint(f) {
   return {
-    scan:  isScanPointUsable(f)  ? f.freq_scan  : null,
     phase: isPhasePointUsable(f) ? f.freq_phase : null,
     pll:   (f && f.gap_ok && f.freq_pll > 0) ? f.freq_pll : null,
     amp:   f ? f.amplitude : null
@@ -562,20 +503,7 @@ function getFreqUsed(f) {
   if (!f || !f.gap_ok) return null;
   if (f.freq_pll > 0) return f.freq_pll;
   if (isPhasePointUsable(f)) return f.freq_phase;
-  if (isScanPointUsable(f)) return f.freq_scan;
   return null;
-}
-
-function estimateStaticPhaseOffsetHz() {
-  const offsets = freqSession
-    .slice(-80)
-    .filter(isPhasePointUsable)
-    .map(f => {
-      const p = interpolatePos(f.t_true_ms);
-      return p && Math.abs(p.vel_ms) < 0.08 ? (f.freq_phase - f.fc) : null;
-    })
-    .filter(v => v !== null);
-  return offsets.length >= 5 ? medianOf(offsets) : null;
 }
 
 function updateDerivedFc() {
@@ -585,20 +513,18 @@ function updateDerivedFc() {
   const staticVals = freqSession
     .filter(f => f.elapsed_s <= EARLY_WINDOW_S)
     .map(f => {
-      const p = interpolatePos(f.t_true_ms);
+      const p    = interpolatePos(f.t_true_ms);
       const used = getFreqUsed(f);
       return (p && used !== null && Math.abs(p.vel_ms) <= STATIC_VEL_MAX) ? used : null;
     })
     .filter(v => v !== null);
 
-  if (!derivedFcLocked && staticVals.length >= 12) {
+  if (!derivedFcLocked && staticVals.length >= 12)
     derivedFc = medianOf(staticVals);
-  }
 
   const moved = posSession.some(p => p.elapsed_s > 0.8 && Math.abs(p.vel_ms) >= MOTION_VEL_MIN);
-  if (moved && staticVals.length >= 12) {
+  if (moved && staticVals.length >= 12)
     derivedFcLocked = true;
-  }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -625,64 +551,42 @@ function updateCalPanel() {
   const pgCnt  = document.getElementById('calProgressCount');
   const pgFill = document.getElementById('calProgressFill');
 
-  const stateClass = ['', 'cal-phase-state', 'tracking-state'];
-  const stateLabel = ['SCANNING…', 'PHASE CAL…', 'TRACKING ✓'];
+  const isTracking = lastCalStatus === 2;
 
-  // パネル・バッジの色クラス切替
-  panel.className = 'cal-panel ' + (stateClass[lastCalStatus] || '');
-  badge.className = 'cal-state-badge ' + (stateClass[lastCalStatus] || '');
-  stTxt.textContent = lastCalStatus >= 0 ? stateLabel[lastCalStatus] : 'WAITING';
+  panel.className = 'cal-panel' + (isTracking ? ' tracking-state' : '');
+  badge.className = 'cal-state-badge' + (isTracking ? ' tracking-state' : '');
+  stTxt.textContent = isTracking ? 'TRACKING ✓' : 'WAITING';
 
   const dot = badge.querySelector('.cal-dot');
-  if (dot) dot.className = 'cal-dot' + (lastCalStatus < 2 ? ' blink' : '');
+  if (dot) dot.className = 'cal-dot' + (isTracking ? '' : ' blink');
 
-  // f_c 表示
-  if (lastCalStatus >= 1 || isFreqConnected) {
+  if (isTracking || isFreqConnected) {
     const refFc = getReferenceFc();
-    fcVal.textContent = `f_c(ref) = ${refFc.toFixed(2)} Hz`;
+    fcVal.textContent  = `f_c(ref) = ${refFc.toFixed(2)} Hz`;
     offVal.textContent = `nominal/start: ${lastFc.toFixed(2)} Hz`;
   } else {
     fcVal.textContent  = 'f_c(ref) = waiting…';
     offVal.textContent = '';
   }
 
-  // プログレスバー
-  if (lastCalStatus === 0) {
-    const pct = Math.min(100, lastCalProgress / N_CAL_SCAN * 100);
-    pgLbl.textContent = `TRACKING 開始待ち`;
-    pgCnt.textContent = '';
-    pgFill.style.width = pct + '%';
-    pgFill.className   = 'cal-progress-fill';
-    pgWrap.style.display = '';
-  } else if (lastCalStatus === 1) {
-    const pct = Math.min(100, lastCalProgress / N_CAL_PHASE * 100);
-    pgLbl.textContent = `PHASE CAL — Δφ₀ 決定中（カートを静止させてください）`;
-    pgCnt.textContent = `${lastCalProgress} / ${N_CAL_PHASE}`;
-    pgFill.style.width = pct + '%';
-    pgFill.className   = 'cal-progress-fill cal-phase-state';
-    pgWrap.style.display = '';
-  } else if (lastCalStatus === 2) {
+  if (isTracking) {
     pgFill.style.width = derivedFcLocked ? '100%' : (derivedFc !== null ? '72%' : '32%');
     pgFill.className   = 'cal-progress-fill tracking-state';
-    pgLbl.textContent  = derivedFcLocked ? '静止区間から参照周波数を確定' :
-                         derivedFc !== null ? '静止区間から参照周波数を推定中' :
-                         'nominal 1000 Hz で TRACKING 開始';
+    pgLbl.textContent  = derivedFcLocked       ? '静止区間から参照周波数を確定'   :
+                         derivedFc !== null     ? '静止区間から参照周波数を推定中' :
+                                                  'nominal 1000 Hz で TRACKING 開始';
     pgCnt.textContent  = derivedFc !== null ? `ref ${derivedFc.toFixed(2)} Hz` : 'ref pending';
     pgWrap.style.display = '';
-    // fcInput に測定値を自動反映（初回のみ）
     const inp = document.getElementById('fcInput');
     if (!inp.value) inp.value = getReferenceFc().toFixed(2);
   } else {
     pgWrap.style.display = 'none';
   }
 
-  // Δφ₀ 表示（TRACKING 到達後）
-  if (lastCalStatus === 2 || isFreqConnected) {
+  if (isTracking || isFreqConnected) {
     if (derivedFc !== null) {
       const err = derivedFc - lastFc;
       dp0Val.textContent = `auto-zero補正: ${err >= 0 ? '+' : ''}${err.toFixed(3)} Hz`;
-    } else if (lastDphi0Hz !== null) {
-      dp0Val.textContent = `静止時近似の Δφ₀ 等価オフセット: ${lastDphi0Hz >= 0 ? '+' : ''}${lastDphi0Hz.toFixed(3)} Hz`;
     } else {
       dp0Val.textContent = '静止区間が十分に集まると f_c(ref) を自動確定';
     }
@@ -726,14 +630,10 @@ function handlePositionNotify(event) {
   }
 
   if (rawChange !== null) {
-    const now    = performance.now();
+    const now = performance.now();
     lastPositionNotifyMs = now;
-    // リセット直後: 大きな delta（カート移動残差）を最大3パケット捨てる
     if (postResetGuard > 0) {
-      if (Math.abs(rawChange) * POS_SCALE > 0.05) {
-        postResetGuard--;
-        return;
-      }
+      if (Math.abs(rawChange) * POS_SCALE > 0.05) { postResetGuard--; return; }
       postResetGuard = 0;
     }
     countAccumulated += rawChange;
@@ -764,10 +664,9 @@ function onFreqNotify(event) {
 
   const t_esp_s = parseFloat(parts[0]);
 
-  // 8フィールド (PLL対応) / 7フィールド (旧) / 3フィールド (最旧) の互換対応
-  let freq_scan, freq_phase, freq_pll = -1, amplitude, status, fc_val, cal_progress;
+  // 8フィールド (PLL) / 7フィールド (旧位相版) / 3フィールド (最旧) 互換
+  let freq_phase, freq_pll = -1, amplitude, status, fc_val, cal_progress;
   if (parts.length >= 8) {
-    freq_scan    = parseFloat(parts[1]);
     freq_phase   = parseFloat(parts[2]);
     amplitude    = parseFloat(parts[3]);
     status       = parseInt(parts[4]);
@@ -775,28 +674,20 @@ function onFreqNotify(event) {
     cal_progress = parseInt(parts[6]);
     freq_pll     = parseFloat(parts[7]);
   } else if (parts.length >= 7) {
-    freq_scan    = parseFloat(parts[1]);
     freq_phase   = parseFloat(parts[2]);
     amplitude    = parseFloat(parts[3]);
     status       = parseInt(parts[4]);
     fc_val       = parseFloat(parts[5]);
     cal_progress = parseInt(parts[6]);
   } else {
-    freq_scan    = parseFloat(parts[1]);
     freq_phase   = -1;
     amplitude    = parts.length >= 3 ? parseFloat(parts[2]) : 0;
-    status       = 2;       // 旧ファームは常にトラッキング扱い
+    status       = 2;
     fc_val       = 1000.0;
     cal_progress = 0;
   }
 
-  // キャリブレーション状態を更新（録画中かどうかに関わらず）
   if (lastCalStatus !== status || Math.abs(lastFc - fc_val) > 0.01) {
-    if (lastCalStatus === 1 && status === 2) {
-      // CAL_PHASE → TRACKING 遷移: Δφ₀ の等価周波数を推定
-      // dphi0_hz ≈ (freq_phase - fc) の静止時平均 (ここでは最初の freq_phase から近似)
-      lastDphi0Hz = 0.0; // 遷移直後はゼロ表示、以後の静止時測定で推定
-    }
     lastCalStatus   = status;
     lastFc          = fc_val;
     lastCalProgress = cal_progress;
@@ -808,16 +699,13 @@ function onFreqNotify(event) {
 
   if (!isRecording) return;
 
-  // ESP32 内部時刻を elapsed_s の基準に使う（BLE ジッター排除）
   if (firstFreqEspTime < 0) firstFreqEspTime = t_esp_s;
   const elapsed_s = t_esp_s - firstFreqEspTime;
 
   const t_recv_ms = performance.now();
   if (firstFreqRecvMs < 0) firstFreqRecvMs = t_recv_ms;
-  const t_aligned_ms = firstFreqRecvMs + elapsed_s * 1000;
-  const t_true_ms = t_aligned_ms - timeAlignOffsetMs;
+  const t_true_ms = firstFreqRecvMs + elapsed_s * 1000 - timeAlignOffsetMs;
 
-  // パケットギャップ検出
   let gap_ok = true;
   if (prevFreqEspTime >= 0) {
     const gap_ms = (t_esp_s - prevFreqEspTime) * 1000;
@@ -828,46 +716,19 @@ function onFreqNotify(event) {
   }
   prevFreqEspTime = t_esp_s;
 
-  // ── JS 側安全網（旧ファームウェアとの互換）──────────────────────
-  // freq_scan 連続性チェック（1フレームで8Hz超の跳躍は偽ピーク）
-  if (freq_scan > 0) {
-    if (lastValidFreqScan > 0 && Math.abs(freq_scan - lastValidFreqScan) > 8) {
-      freq_scan = -1;
-    } else {
-      lastValidFreqScan = freq_scan;
-      jsScanMissCount   = 0;
-    }
-  }
-  if (freq_scan < 0 && ++jsScanMissCount > 3) lastValidFreqScan = -1;
-
-  // 物理的範囲チェック（最大 Δf ≈ fc×v/c、v=4.1 m/s → ±12 Hz）
-  // PLL がロック中なら freq_pll（≈ f_est）を基準にする。
-  // fc_val（名目 1000 Hz）を使うと高速時に正常な freq_phase を誤棄却する。
+  // 物理的範囲チェック（v=4.1 m/s → ±12 Hz）
+  // PLL ロック中は freq_pll を基準にする（名目 1000 Hz 基準だと高速時に誤棄却）
   const _phaseRef = freq_pll > 0 ? freq_pll : fc_val;
-  if (freq_phase > 0 && Math.abs(freq_phase - _phaseRef) > 12) {
-    freq_phase = -1;
-  }
-  // ───────────────────────────────────────────────────────────────
+  if (freq_phase > 0 && Math.abs(freq_phase - _phaseRef) > 12) freq_phase = -1;
 
-  const sample = {
-    t_true_ms, elapsed_s,
-    freq_scan, freq_phase, freq_pll, amplitude,
-    status, fc: fc_val, gap_ok
-  };
+  const sample = { t_true_ms, elapsed_s, freq_phase, freq_pll, amplitude, status, fc: fc_val, gap_ok };
   freqSession.push(sample);
   updateDerivedFc();
   updateCalPanel();
 
-  // 表示用デュアルバッファに追加
   freqDualValues.push(buildDualPoint(sample));
   freqTimeValues.push(sample.elapsed_s);
   if (freqDualValues.length > MAX_POINTS) { freqDualValues.shift(); freqTimeValues.shift(); }
-
-  // TRACKING到達後に、静止時に近い点だけで Δφ₀ 等価Hz を推定
-  if (status === 2) {
-    const offsetHz = estimateStaticPhaseOffsetHz();
-    if (offsetHz !== null) lastDphi0Hz = offsetHz;
-  }
 
   drawFreqDualChart(ctxFreq, freqDualValues, freqTimeValues, document.getElementById('freqAxisLabel'));
   updateStats();
@@ -884,13 +745,10 @@ function sampleTick() {
 
   const now       = performance.now();
   const elapsed_s = (now - recordStartTime) / 1000;
-  const pos       = latestPosition;
-  const vel       = latestVelocity;
+  posSession.push({ t_ms: now, elapsed_s, pos_m: latestPosition, vel_ms: latestVelocity });
 
-  posSession.push({ t_ms: now, elapsed_s, pos_m: pos, vel_ms: vel });
-
-  posValues.push(pos);
-  velValues.push(vel);
+  posValues.push(latestPosition);
+  velValues.push(latestVelocity);
   posTimeValues.push(elapsed_s);
   const sliceV = velValues.slice(Math.max(0, velValues.length - VEL_SMOOTH_WIN));
   velSmoothValues.push(sliceV.reduce((a, b) => a + b, 0) / sliceV.length);
@@ -912,9 +770,7 @@ const ctxFreq    = document.getElementById('chartFreq').getContext('2d');
 const ctxScatter = document.getElementById('chartScatter').getContext('2d');
 
 // ═══════════════════════════════════════════════════════
-//  汎用単一線チャート
-// ═══════════════════════════════════════════════════════
-//  時間軸（秒刻みtick + ラベル）共通ヘルパー
+//  時間軸ヘルパー
 // ═══════════════════════════════════════════════════════
 function drawTimeAxis(ctx, times, PAD_L, PAD_T, plotW, plotH) {
   if (!times || times.length < 2) return;
@@ -922,26 +778,21 @@ function drawTimeAxis(ctx, times, PAD_L, PAD_T, plotW, plotH) {
   if (tMax <= tMin) return;
   const toX = t => PAD_L + (t - tMin) / (tMax - tMin) * plotW;
 
-  // 刻み幅: 画面幅に応じて 6〜10 本程度を目安に選ぶ
-  const span = tMax - tMin;
+  const span        = tMax - tMin;
   const targetTicks = Math.max(6, Math.min(10, Math.floor(plotW / 120)));
-  const steps = [0.2, 0.5, 1, 2, 5, 10, 20, 30, 60];
-  const step = steps.find(s => span / s <= targetTicks) || 60;
-  const minorStep = step >= 1 ? step / 2 : step;
+  const steps       = [0.2, 0.5, 1, 2, 5, 10, 20, 30, 60];
+  const step        = steps.find(s => span / s <= targetTicks) || 60;
+  const minorStep   = step >= 1 ? step / 2 : step;
+  const yBase       = PAD_T + plotH;
 
-  const yBase = PAD_T + plotH;
   ctx.save();
-  ctx.strokeStyle = 'rgba(100,120,140,0.6)';
-  ctx.fillStyle = '#6b8099';
   ctx.font = '10px "Share Tech Mono",monospace';
   ctx.textAlign = 'center';
   ctx.lineWidth = 1;
 
-  const sMinor = Math.ceil(tMin / minorStep) * minorStep;
   if (minorStep < step) {
-    for (let s = sMinor; s <= tMax + 1e-9; s += minorStep) {
-      const isMajor = Math.abs(Math.round(s / step) * step - s) < 1e-6;
-      if (isMajor) continue;
+    for (let s = Math.ceil(tMin / minorStep) * minorStep; s <= tMax + 1e-9; s += minorStep) {
+      if (Math.abs(Math.round(s / step) * step - s) < 1e-6) continue;
       const x = toX(s);
       ctx.strokeStyle = 'rgba(160,185,210,0.18)';
       ctx.beginPath(); ctx.moveTo(x, PAD_T); ctx.lineTo(x, yBase); ctx.stroke();
@@ -949,23 +800,22 @@ function drawTimeAxis(ctx, times, PAD_L, PAD_T, plotW, plotH) {
       ctx.beginPath(); ctx.moveTo(x, yBase); ctx.lineTo(x, yBase + 3); ctx.stroke();
     }
   }
-
-  const s0 = Math.ceil(tMin / step) * step;
-  for (let s = s0; s <= tMax + 1e-9; s += step) {
+  for (let s = Math.ceil(tMin / step) * step; s <= tMax + 1e-9; s += step) {
     const x = toX(s);
     ctx.strokeStyle = 'rgba(160,185,210,0.35)';
     ctx.beginPath(); ctx.moveTo(x, PAD_T); ctx.lineTo(x, yBase); ctx.stroke();
     ctx.strokeStyle = 'rgba(100,120,140,0.65)';
     ctx.beginPath(); ctx.moveTo(x, yBase); ctx.lineTo(x, yBase + 5); ctx.stroke();
+    ctx.fillStyle = '#6b8099';
     ctx.fillText(Number.isInteger(step) ? s.toFixed(0) : s.toFixed(1), x, yBase + 15);
   }
-
-  // 軸線
   ctx.strokeStyle = 'rgba(100,120,140,0.3)';
   ctx.beginPath(); ctx.moveTo(PAD_L, yBase); ctx.lineTo(PAD_L + plotW, yBase); ctx.stroke();
   ctx.restore();
 }
 
+// ═══════════════════════════════════════════════════════
+//  汎用単一線チャート
 // ═══════════════════════════════════════════════════════
 function drawChart(ctx, data, color, times, labelEl, unit) {
   const W = ctx.canvas.width, H = ctx.canvas.height;
@@ -987,8 +837,7 @@ function drawChart(ctx, data, color, times, labelEl, unit) {
   for (let k = 0; k <= 4; k++) {
     const y = PAD_T + (k / 4) * plotH;
     ctx.beginPath(); ctx.moveTo(PAD_L, y); ctx.lineTo(PAD_L + plotW, y); ctx.stroke();
-    ctx.fillStyle = '#6b8099'; ctx.font = '10px "Share Tech Mono",monospace';
-    ctx.textAlign = 'right';
+    ctx.fillStyle = '#6b8099'; ctx.font = '10px "Share Tech Mono",monospace'; ctx.textAlign = 'right';
     ctx.fillText((max - (k / 4) * range).toFixed(unit === 'Hz' ? 1 : 3), PAD_L - 6, y + 4);
   }
   if (min < 0 && max > 0) {
@@ -1006,10 +855,7 @@ function drawChart(ctx, data, color, times, labelEl, unit) {
   ctx.arc(toX(data.length - 1), toY(data[data.length - 1]), 4, 0, Math.PI * 2);
   ctx.fill();
   if (useTimes) drawTimeAxis(ctx, times, PAD_L, PAD_T, plotW, plotH);
-  if (labelEl) {
-    const dec = unit === 'Hz' ? 2 : 3;
-    labelEl.textContent = `min ${min.toFixed(dec)} / max ${max.toFixed(dec)} ${unit}`;
-  }
+  if (labelEl) labelEl.textContent = `min ${min.toFixed(unit === 'Hz' ? 2 : 3)} / max ${max.toFixed(unit === 'Hz' ? 2 : 3)} ${unit}`;
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1022,8 +868,7 @@ function drawVelChart(ctx, rawData, smoothData, times, labelEl) {
 
   const PAD_L = 62, PAD_R = 12, PAD_T = 12, PAD_B = 34;
   const plotW = W - PAD_L - PAD_R, plotH = H - PAD_T - PAD_B;
-  const all = rawData.concat(smoothData);
-  let min = Math.min(...all), max = Math.max(...all);
+  let min = Math.min(...rawData, ...smoothData), max = Math.max(...rawData, ...smoothData);
   if (Math.abs(max - min) < 0.001) { min -= 0.1; max += 0.1; }
   const range = max - min;
   const toY = v => PAD_T + plotH - ((v - min) / range) * plotH;
@@ -1044,13 +889,11 @@ function drawVelChart(ctx, rawData, smoothData, times, labelEl) {
     ctx.beginPath(); ctx.moveTo(PAD_L, y0); ctx.lineTo(PAD_L + plotW, y0); ctx.stroke();
     ctx.setLineDash([]);
   }
-  // raw 薄線
   ctx.strokeStyle = 'rgba(74,140,0,0.25)'; ctx.lineWidth = 1.2;
   ctx.beginPath();
   for (let i = 0; i < rawData.length; i++)
     i === 0 ? ctx.moveTo(toX(i), toY(rawData[i])) : ctx.lineTo(toX(i), toY(rawData[i]));
   ctx.stroke();
-  // smoothed 主線
   if (smoothData.length >= 2) {
     ctx.strokeStyle = '#4a8c00'; ctx.lineWidth = 2;
     ctx.beginPath();
@@ -1069,7 +912,7 @@ function drawVelChart(ctx, rawData, smoothData, times, labelEl) {
 }
 
 // ═══════════════════════════════════════════════════════
-//  周波数デュアルチャート（スキャン法 + 位相追跡法）
+//  周波数チャート（位相追跡法 + PLL）
 // ═══════════════════════════════════════════════════════
 function drawFreqDualChart(ctx, dualData, times, labelEl) {
   const W = ctx.canvas.width, H = ctx.canvas.height;
@@ -1083,10 +926,8 @@ function drawFreqDualChart(ctx, dualData, times, labelEl) {
   const tMin = useTimes ? times[0] : 0, tMax = useTimes ? times[n - 1] : n - 1;
   const toX = i => PAD_L + ((useTimes ? times[i] : i) - tMin) / (tMax - tMin) * plotW;
 
-  // Y 軸範囲: 両系列の有効値から決定
   const allVals = [];
   for (const d of dualData) {
-    if (d.scan  !== null) allVals.push(d.scan);
     if (d.phase !== null) allVals.push(d.phase);
     if (d.pll   !== null) allVals.push(d.pll);
   }
@@ -1096,7 +937,6 @@ function drawFreqDualChart(ctx, dualData, times, labelEl) {
   const range = max - min;
   const toY = v => PAD_T + plotH - ((v - min) / range) * plotH;
 
-  // グリッド
   ctx.strokeStyle = 'rgba(160,185,210,0.5)'; ctx.lineWidth = 1;
   for (let k = 0; k <= 4; k++) {
     const y = PAD_T + (k / 4) * plotH;
@@ -1105,7 +945,7 @@ function drawFreqDualChart(ctx, dualData, times, labelEl) {
     ctx.fillText((max - (k / 4) * range).toFixed(1), PAD_L - 6, y + 4);
   }
 
-  // f_c(ref) 基準線（TRACKING 時）— 散布図と同じ getReferenceFc() を使う
+  // f_c(ref) 基準線 — 散布図と同じ getReferenceFc() を使う
   if (lastCalStatus === 2) {
     const refVal = getReferenceFc();
     const yfc = toY(refVal);
@@ -1119,22 +959,7 @@ function drawFreqDualChart(ctx, dualData, times, labelEl) {
     }
   }
 
-  // ── スキャン法（橙・薄線）────────────────────────
-  if (showScan) {
-    ctx.strokeStyle = 'rgba(176,96,0,0.5)'; ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    for (let i = 0; i < n; i++) {
-      const v = dualData[i].scan;
-      if (v === null) continue;
-      const x = toX(i), y = toY(v);
-      const prevOk = i > 0 && dualData[i - 1].scan !== null;
-      prevOk ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
-    }
-    ctx.stroke();
-  }
-
-  // ── 位相追跡法（青・補助線）────────────────────────
-  // 高信頼（amp >= ampThreshold*2）は実線、低信頼は灰色点で区別
+  // ── 位相追跡法（青・補助線）
   const highAmpThr = Math.max(phaseAmpThreshold * 2, phaseAmpThreshold + 10);
 
   ctx.strokeStyle = 'rgba(0,68,204,0.82)'; ctx.lineWidth = 1.9;
@@ -1148,81 +973,62 @@ function drawFreqDualChart(ctx, dualData, times, labelEl) {
   }
   ctx.stroke();
 
-  // 低信頼点（ampThreshold 以上かつ highAmpThr 未満）を灰色小円で表示
   for (let i = 0; i < n; i++) {
     const d = dualData[i];
     if (d.phase === null || d.amp >= highAmpThr) continue;
     ctx.fillStyle = 'rgba(120,140,170,0.55)';
-    ctx.beginPath();
-    ctx.arc(toX(i), toY(d.phase), 2, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.beginPath(); ctx.arc(toX(i), toY(d.phase), 2, 0, Math.PI * 2); ctx.fill();
   }
-
-  // 最新値マーカー（位相法）
   for (let i = n - 1; i >= 0; i--) {
     if (dualData[i].phase !== null) {
       const isLowConf = dualData[i].amp < highAmpThr;
       ctx.fillStyle = isLowConf ? 'rgba(120,140,170,0.7)' : '#0044cc';
-      ctx.beginPath();
-      ctx.arc(toX(i), toY(dualData[i].phase), 4, 0, Math.PI * 2);
-      ctx.fill(); break;
+      ctx.beginPath(); ctx.arc(toX(i), toY(dualData[i].phase), 4, 0, Math.PI * 2); ctx.fill();
+      break;
     }
   }
 
-  // ── PLL 推定（紫・実線）────────────────────────────
+  // ── PLL（紫・実線）
   ctx.save();
-  ctx.strokeStyle = 'rgba(170,0,119,0.18)';
-  ctx.lineWidth = 6;
+  ctx.strokeStyle = 'rgba(170,0,119,0.18)'; ctx.lineWidth = 6;
   ctx.beginPath();
   for (let i = 0; i < n; i++) {
-    const v = dualData[i].pll;
-    if (v === null) continue;
+    const v = dualData[i].pll; if (v === null) continue;
     const x = toX(i), y = toY(v);
-    const prevOk = i > 0 && dualData[i - 1].pll !== null;
-    prevOk ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    (i > 0 && dualData[i - 1].pll !== null) ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
   }
   ctx.stroke();
-
-  ctx.strokeStyle = '#aa0077';
-  ctx.lineWidth = 2.8;
+  ctx.strokeStyle = '#aa0077'; ctx.lineWidth = 2.8;
   ctx.beginPath();
   for (let i = 0; i < n; i++) {
-    const v = dualData[i].pll;
-    if (v === null) continue;
+    const v = dualData[i].pll; if (v === null) continue;
     const x = toX(i), y = toY(v);
-    const prevOk = i > 0 && dualData[i - 1].pll !== null;
-    prevOk ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    (i > 0 && dualData[i - 1].pll !== null) ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
   }
   ctx.stroke();
   ctx.restore();
-  // 最新値マーカー（PLL）
+
   for (let i = n - 1; i >= 0; i--) {
     if (dualData[i].pll !== null) {
       const x = toX(i), y = toY(dualData[i].pll);
       ctx.fillStyle = '#aa0077';
-      ctx.beginPath(); ctx.arc(x, y, 4.5, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(255,255,255,0.9)';
-      ctx.lineWidth = 1.5;
-      ctx.beginPath(); ctx.arc(x, y, 7.5, 0, Math.PI * 2);
-      ctx.stroke();
+      ctx.beginPath(); ctx.arc(x, y, 4.5, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(x, y, 7.5, 0, Math.PI * 2); ctx.stroke();
       break;
     }
   }
 
   if (useTimes) drawTimeAxis(ctx, times, PAD_L, PAD_T, plotW, plotH);
-  if (labelEl) {
-    labelEl.textContent = `min ${min.toFixed(2)} / max ${max.toFixed(2)} Hz`;
-  }
+  if (labelEl) labelEl.textContent = `min ${min.toFixed(2)} / max ${max.toFixed(2)} Hz`;
 }
 
 // ═══════════════════════════════════════════════════════
-//  f₀ 推定（キャリブレーション済みなら fc、未なら静止時中央値）
+//  f_ref（散布図・理論曲線用）
 // ═══════════════════════════════════════════════════════
 function getFRef() {
   if (derivedFc !== null) return derivedFc;
   if (lastCalStatus === 2 && lastFc > 0) return lastFc;
-  // フォールバック: 位相法の静止時中央値
   const vals = freqSession
     .filter(isPhasePointUsable)
     .map(f => {
@@ -1234,23 +1040,11 @@ function getFRef() {
     vals.sort((a, b) => a - b);
     return vals[Math.floor(vals.length / 2)];
   }
-  // さらにフォールバック: スキャン法中央値
-  const scanVals = freqSession
-    .filter(isScanPointUsable)
-    .map(f => {
-      const p = interpolatePos(f.t_true_ms);
-      return p && Math.abs(p.vel_ms) < 0.08 ? f.freq_scan : null;
-    })
-    .filter(v => v !== null);
-  if (scanVals.length >= 3) {
-    scanVals.sort((a, b) => a - b);
-    return scanVals[Math.floor(scanVals.length / 2)];
-  }
   return 1000.0;
 }
 
 // ═══════════════════════════════════════════════════════
-//  散布図（v vs. Δf）— スキャン法（橙小点）+ 位相法（青大点）
+//  散布図（v vs. Δf）
 // ═══════════════════════════════════════════════════════
 function drawScatter() {
   if (!ctxScatter) return;
@@ -1264,7 +1058,6 @@ function drawScatter() {
   const toX = v  => PAD_L + (v + V_MAX) / (2 * V_MAX) * plotW;
   const toY = df => PAD_T + plotH - (df + DF_MAX) / (2 * DF_MAX) * plotH;
 
-  // グリッド
   ctxScatter.strokeStyle = 'rgba(160,185,210,0.45)'; ctxScatter.lineWidth = 1;
   [-3,-2,-1,0,1,2,3].forEach(v => {
     const x = toX(v);
@@ -1280,29 +1073,24 @@ function drawScatter() {
     ctxScatter.fillText(df.toFixed(0), PAD_L - 6, y + 4);
   });
 
-  // 軸ラベル
   ctxScatter.fillStyle = '#6b8099'; ctxScatter.font = '11px "Exo 2",sans-serif';
   ctxScatter.textAlign = 'center';
   ctxScatter.fillText('velocity  v  (m/s)', PAD_L + plotW / 2, PAD_T + plotH + 30);
   ctxScatter.save(); ctxScatter.translate(14, PAD_T + plotH / 2); ctxScatter.rotate(-Math.PI / 2);
   ctxScatter.fillText('Δf (Hz)', 0, 0); ctxScatter.restore();
 
-  // ゼロ軸
   ctxScatter.strokeStyle = 'rgba(100,120,140,0.8)'; ctxScatter.setLineDash([4, 3]); ctxScatter.lineWidth = 1;
   ctxScatter.beginPath(); ctxScatter.moveTo(toX(0), PAD_T); ctxScatter.lineTo(toX(0), PAD_T + plotH); ctxScatter.stroke();
   ctxScatter.beginPath(); ctxScatter.moveTo(PAD_L, toY(0)); ctxScatter.lineTo(PAD_L + plotW, toY(0)); ctxScatter.stroke();
   ctxScatter.setLineDash([]);
 
   const fRef = getFRef();
-  const VS   = 343.0;
-
-  // 理論曲線
   ctxScatter.strokeStyle = '#222'; ctxScatter.lineWidth = 2;
   ctxScatter.beginPath();
   let first = true;
   for (let i = -350; i <= 350; i++) {
     const v = i * V_MAX / 350;
-    const df = fRef * v / (VS - v);
+    const df = fRef * v / (343 - v);
     if (Math.abs(df) > DF_MAX * 1.1) { first = true; continue; }
     const x = toX(v), y = toY(df);
     first ? ctxScatter.moveTo(x, y) : ctxScatter.lineTo(x, y);
@@ -1312,38 +1100,13 @@ function drawScatter() {
 
   const HALF_WIN = 3;
   const n = freqSession.length;
-  let nScan = 0, nMain = 0;
+  let nMain = 0;
 
-  // スキャン法の点（小さい橙点）
-  if (showScan) {
-    for (let i = 0; i < n; i++) {
-      const f = freqSession[i];
-      if (!isScanPointUsable(f)) continue;
-      const lo = Math.max(0, i - HALF_WIN), hi = Math.min(n - 1, i + HALF_WIN);
-      const pLo = interpolatePos(freqSession[lo].t_true_ms);
-      const pHi = interpolatePos(freqSession[hi].t_true_ms);
-      if (!pLo || !pHi) continue;
-      const dt = freqSession[hi].elapsed_s - freqSession[lo].elapsed_s;
-      if (dt <= 0) continue;
-      const v = (pHi.pos_m - pLo.pos_m) / dt;
-      if (Math.abs(v) > 5) continue;
-      const df = f.freq_scan - fRef;
-      const x = toX(v), y = toY(df);
-      if (x < PAD_L || x > PAD_L + plotW || y < PAD_T || y > PAD_T + plotH) continue;
-      ctxScatter.beginPath();
-      ctxScatter.arc(x, y, 3, 0, Math.PI * 2);
-      ctxScatter.fillStyle = 'rgba(176,96,0,0.4)';
-      ctxScatter.fill();
-      nScan++;
-    }
-  }
-
-  // 主系列（PLL優先、無効時のみ位相法）
   for (let i = 0; i < n; i++) {
-    const f = freqSession[i];
+    const f     = freqSession[i];
     const fUsed = getFreqUsed(f);
     if (fUsed === null) continue;
-    const lo = Math.max(0, i - HALF_WIN), hi = Math.min(n - 1, i + HALF_WIN);
+    const lo  = Math.max(0, i - HALF_WIN), hi = Math.min(n - 1, i + HALF_WIN);
     const pLo = interpolatePos(freqSession[lo].t_true_ms);
     const pHi = interpolatePos(freqSession[hi].t_true_ms);
     if (!pLo || !pHi) continue;
@@ -1354,14 +1117,12 @@ function drawScatter() {
     const df = fUsed - fRef;
     const x = toX(v), y = toY(df);
     if (x < PAD_L || x > PAD_L + plotW || y < PAD_T || y > PAD_T + plotH) continue;
-    ctxScatter.beginPath();
-    ctxScatter.arc(x, y, 5, 0, Math.PI * 2);
+    ctxScatter.beginPath(); ctxScatter.arc(x, y, 5, 0, Math.PI * 2);
     ctxScatter.fillStyle = f.freq_pll > 0 ? 'rgba(170,0,119,0.55)' : 'rgba(0,68,204,0.65)';
     ctxScatter.fill();
     nMain++;
   }
 
-  // 凡例
   ctxScatter.font = '10px "Share Tech Mono",monospace'; ctxScatter.textAlign = 'left';
   ctxScatter.fillStyle = '#222';
   ctxScatter.fillText(
@@ -1369,11 +1130,8 @@ function drawScatter() {
     PAD_L + 6, PAD_T + 14);
 
   const infoEl = document.getElementById('scatterInfo');
-  const parts  = [];
-  if (showScan)  parts.push(`scan: ${nScan}`);
-  parts.push(`main(PLL/phase): ${nMain}`);
   if (infoEl) infoEl.textContent =
-    `scan amp≥${scanAmpThreshold} / phase amp≥${phaseAmpThreshold} / align ${timeAlignOffsetMs.toFixed(0)} ms: ${parts.join(' / ')} pts`;
+    `phase amp≥${phaseAmpThreshold} / align ${timeAlignOffsetMs.toFixed(0)} ms: ${nMain} pts`;
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1381,55 +1139,34 @@ function drawScatter() {
 // ═══════════════════════════════════════════════════════
 function updateStats() {
   if (posSession.length > 0) {
-    const last  = posSession[posSession.length - 1];
+    const last    = posSession[posSession.length - 1];
     const vSmooth = velSmoothValues.length > 0
       ? velSmoothValues[velSmoothValues.length - 1] : last.vel_ms;
     document.getElementById('sPosLast').textContent = last.pos_m.toFixed(4) + ' m';
     document.getElementById('sVelLast').textContent = vSmooth.toFixed(3)   + ' m/s';
   }
 
-  const validScan  = freqSession.filter(isScanPointUsable);
-  const validPhase = freqSession.filter(isPhasePointUsable);
-  const validPll   = freqSession.filter(f => f.gap_ok && f.freq_pll > 0);
-  const validUsed  = freqSession
+  const validUsed = freqSession
     .map(f => ({ sample: f, used: getFreqUsed(f) }))
-    .filter(entry => entry.used !== null);
-
-  if (validScan.length > 0) {
-    document.getElementById('sFreqScan').textContent =
-      validScan[validScan.length - 1].freq_scan.toFixed(2) + ' Hz';
-  } else if (freqSession.length > 0 && freqSession[freqSession.length - 1].status === 2) {
-    document.getElementById('sFreqScan').textContent = 'tracking中は inactive';
-  }
+    .filter(e => e.used !== null);
 
   if (validUsed.length > 0) {
-    const lastUsed = validUsed[validUsed.length - 1];
-    const src = lastUsed.sample.freq_pll > 0 ? 'PLL' : 'PHASE';
-    document.getElementById('sFreqPhase').textContent = `${lastUsed.used.toFixed(2)} Hz`;
-    document.getElementById('sFreqPll').textContent = `${src} used / ${getStatusLabel(lastUsed.sample.status)}`;
-  } else if (validPhase.length > 0) {
-    document.getElementById('sFreqPhase').textContent =
-      validPhase[validPhase.length - 1].freq_phase.toFixed(2) + ' Hz';
-    document.getElementById('sFreqPll').textContent = `PHASE only / ${getStatusLabel(validPhase[validPhase.length - 1].status)}`;
-  } else if (validPll.length > 0) {
-    document.getElementById('sFreqPll').textContent =
-      'pll: ' + validPll[validPll.length - 1].freq_pll.toFixed(2) + ' Hz';
-  } else {
-    document.getElementById('sFreqPll').textContent = '';
+    const last = validUsed[validUsed.length - 1];
+    const src  = last.sample.freq_pll > 0 ? 'PLL' : 'PHASE';
+    document.getElementById('sFreqPhase').textContent = `${last.used.toFixed(2)} Hz`;
+    document.getElementById('sFreqPll').textContent   = `${src} / TRACKING`;
   }
 
-  const lastSample = freqSession.length > 0 ? freqSession[freqSession.length - 1] : null;
-  const lastAmp = lastSample ? lastSample.amplitude : 0;
-  const ampLabel = lastSample && lastSample.status === 2 ? 'IQ amp' : 'scan amp';
-  const lowAmpCount = freqSession.filter(f => f.status === 2 && f.amplitude < phaseAmpThreshold).length;
+  const lastSample   = freqSession.length > 0 ? freqSession[freqSession.length - 1] : null;
+  const lastAmp      = lastSample ? lastSample.amplitude : 0;
+  const lowAmpCount  = freqSession.filter(f => f.amplitude < phaseAmpThreshold).length;
   const invalidCount = freqSession.filter(f => getFreqUsed(f) === null).length;
-  const refFc = getReferenceFc();
   document.getElementById('sAmplitude').textContent =
-    `${ampLabel}: ${lastAmp.toFixed(0)} / f_ref: ${refFc.toFixed(2)} Hz / lowAmp ${lowAmpCount} / invalid ${invalidCount}`;
+    `IQ amp: ${lastAmp.toFixed(0)} / f_ref: ${getReferenceFc().toFixed(2)} Hz / lowAmp ${lowAmpCount} / invalid ${invalidCount}`;
 }
 
 // ═══════════════════════════════════════════════════════
-//  BLE 接続 — Smart Cart（doppler_55ms.html と同一ロジック）
+//  BLE 接続 — Smart Cart
 // ═══════════════════════════════════════════════════════
 async function connectSmartCart() {
   try {
@@ -1446,8 +1183,8 @@ async function connectSmartCart() {
     const server = await cartDevice.gatt.connect();
     log('GATT connected.');
 
-    const posSvc  = await server.getPrimaryService(POSITION_SERVICE);
-    const chars   = await posSvc.getCharacteristics();
+    const posSvc = await server.getPrimaryService(POSITION_SERVICE);
+    const chars  = await posSvc.getCharacteristics();
     log(`Position service: ${chars.length} char(s)`);
 
     const devSvc  = await server.getPrimaryService(DEVICE_SERVICE);
@@ -1455,9 +1192,7 @@ async function connectSmartCart() {
     const devRecv = await devSvc.getCharacteristic('4a5c0000-0003-0000-0000-5c1e741f1c00');
     await devRecv.startNotifications();
     devRecv.addEventListener('characteristicvaluechanged', e => {
-      const b = Array.from(new Uint8Array(e.target.value.buffer))
-        .map(x => x.toString(16).padStart(2,'0')).join(' ');
-      log(`[dev recv] ${b}`);
+      log(`[dev recv] ${Array.from(new Uint8Array(e.target.value.buffer)).map(x => x.toString(16).padStart(2,'0')).join(' ')}`);
       handlePositionNotify(e);
     });
 
@@ -1471,9 +1206,7 @@ async function connectSmartCart() {
     const char0003 = await posSvc.getCharacteristic('4a5c0003-0003-0000-0000-5c1e741f1c00');
     await char0003.startNotifications();
     char0003.addEventListener('characteristicvaluechanged', e => {
-      const b = Array.from(new Uint8Array(e.target.value.buffer))
-        .map(x => x.toString(16).padStart(2,'0')).join(' ');
-      log(`[pos 0003] ${b}`);
+      log(`[pos 0003] ${Array.from(new Uint8Array(e.target.value.buffer)).map(x => x.toString(16).padStart(2,'0')).join(' ')}`);
       handlePositionNotify(e);
     });
 
@@ -1502,7 +1235,7 @@ function setCartStatus(text, connected = false) {
 }
 
 // ═══════════════════════════════════════════════════════
-//  BLE 接続 — Freq/Phase Sensor（Char 2A58 Notify + 2A59 Write）
+//  BLE 接続 — Freq/Phase Sensor
 // ═══════════════════════════════════════════════════════
 async function connectFreqSensor() {
   try {
@@ -1517,13 +1250,11 @@ async function connectFreqSensor() {
     const server  = await freqDevice.gatt.connect();
     const service = await server.getPrimaryService('environmental_sensing');
 
-    // データ受信（Notify）
     freqChar = await service.getCharacteristic('analog');
     await freqChar.startNotifications();
     freqChar.addEventListener('characteristicvaluechanged', onFreqNotify);
     log('Freq notify started.');
 
-    // コマンド送信（Write） — 新ファームウェアのみ存在
     try {
       pCmdChar = await service.getCharacteristic(0x2a59);
       log('Command char (0x2A59) found — phase firmware detected.');
@@ -1531,13 +1262,12 @@ async function connectFreqSensor() {
       document.getElementById('btnSetFc').disabled = false;
     } catch (_) {
       pCmdChar = null;
-      log('Command char not found — legacy firmware (3-field output).');
+      log('Command char not found — legacy firmware.');
     }
 
     isFreqConnected = true;
     setFreqStatus('CONNECTED: ' + freqDevice.name, true);
     lastCalStatus = -1;
-    lastDphi0Hz = null;
     updateCalPanel();
     updateButtonStates();
   } catch (e) {
@@ -1548,14 +1278,13 @@ async function connectFreqSensor() {
 }
 
 function onFreqDisconnected() {
-  isFreqConnected = false;
-  pCmdChar        = null;
-  firstFreqRecvMs = -1;
+  isFreqConnected   = false;
+  pCmdChar          = null;
+  firstFreqRecvMs   = -1;
   timeAlignOffsetMs = SAMPLING_TAIL_MS;
-  derivedFc = null;
-  derivedFcLocked = false;
-  lastCalStatus   = -1;
-  lastDphi0Hz     = null;
+  derivedFc         = null;
+  derivedFcLocked   = false;
+  lastCalStatus     = -1;
   setFreqStatus('DISCONNECTED');
   document.getElementById('btnRecal').disabled = true;
   document.getElementById('btnSetFc').disabled = true;
@@ -1594,15 +1323,15 @@ function updateButtonStates() {
 //  録画開始 / 停止 / リセット
 // ═══════════════════════════════════════════════════════
 function startRecording() {
-  isRecording     = true;
-  recordStartTime = performance.now();
-  notifyReceived  = false;
-  latestVelocity  = 0;
-  lastNotifyTime  = 0; lastNotifyPos = 0;
-  prevFreqEspTime  = -1; firstFreqEspTime = -1; firstFreqRecvMs = -1;
+  isRecording       = true;
+  recordStartTime   = performance.now();
+  notifyReceived    = false;
+  latestVelocity    = 0;
+  lastNotifyTime    = 0; lastNotifyPos = 0;
+  prevFreqEspTime   = -1; firstFreqEspTime = -1; firstFreqRecvMs = -1;
   timeAlignOffsetMs = SAMPLING_TAIL_MS;
-  derivedFc = null; derivedFcLocked = false;
-  samplerTimerId   = setInterval(sampleTick, SAMPLE_INTERVAL_MS);
+  derivedFc         = null; derivedFcLocked = false;
+  samplerTimerId    = setInterval(sampleTick, SAMPLE_INTERVAL_MS);
   updateButtonStates();
   updateCalPanel();
 }
@@ -1610,8 +1339,7 @@ function startRecording() {
 function stopRecording() {
   isRecording = false;
   if (samplerTimerId) { clearInterval(samplerTimerId); samplerTimerId = null; }
-  const hasData = posSession.length > 0 || freqSession.length > 0;
-  document.getElementById('btnCsv').disabled = !hasData;
+  document.getElementById('btnCsv').disabled = !(posSession.length > 0 || freqSession.length > 0);
   updateButtonStates();
   drawScatter();
 }
@@ -1621,9 +1349,7 @@ function resetAll() {
   countAccumulated = 0; lastPacketSeq = -1;
   latestPosition = 0; latestVelocity = 0;
   notifyReceived = false; lastNotifyTime = 0; lastNotifyPos = 0; notifyPacketCount = 0;
-  postResetGuard = 3;   // 次の3パケットで大ジャンプが来たら捨てる
-  lastValidFreqScan = -1; jsScanMissCount = 0;
-  // PASCO Smart Cart エンコーダをゼロ点リセット
+  postResetGuard = 3;
   if (posCmdChar) {
     posCmdChar.writeValueWithoutResponse(new Uint8Array([0x05, 0x01]))
       .then(() => log('[RESET] Encoder zero sent to cart.'))
@@ -1635,14 +1361,11 @@ function resetAll() {
   posSession = []; freqSession = [];
   posValues = []; velValues = []; velSmoothValues = []; posTimeValues = [];
   freqDualValues = []; freqTimeValues = [];
-  lastDphi0Hz = null;
-  ['sPosLast','sVelLast','sFreqScan','sFreqPhase','sAmplitude','sFreqPll'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.textContent = '—';
+  ['sPosLast','sVelLast','sFreqPhase','sAmplitude','sFreqPll'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.textContent = '—';
   });
   ['posAxisLabel','velAxisLabel','freqAxisLabel','scatterInfo'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.textContent = '';
+    const el = document.getElementById(id); if (el) el.textContent = '';
   });
   document.getElementById('btnCsv').disabled = true;
   [ctxPos, ctxVel, ctxFreq, ctxScatter].forEach(ctx => {
@@ -1652,7 +1375,7 @@ function resetAll() {
 }
 
 // ═══════════════════════════════════════════════════════
-//  位置の線形補間（CSV マージ用）
+//  位置の線形補間（CSV・散布図用）
 // ═══════════════════════════════════════════════════════
 function interpolatePos(t_ms) {
   if (posSession.length === 0) return null;
@@ -1679,39 +1402,36 @@ function interpolatePos(t_ms) {
 // ═══════════════════════════════════════════════════════
 function buildCsv() {
   if (freqSession.length > 0) {
-    let out = 'elapsed_s,pos_m,vel_ms,freq_scan,freq_phase,freq_pll,freq_used,freq_source,amplitude,status,status_label,fc,f_ref_used,f_ref_source,gap_ok\n';
-    const fRefUsed = getReferenceFc();
+    const fRefUsed   = getReferenceFc();
     const fRefSource = derivedFc !== null ? 'static_auto' : 'nominal';
-    const nf    = freqSession.length;
+    const nf   = freqSession.length;
     const HWIN = 3;
+    let out = 'elapsed_s,pos_m,vel_ms,freq_phase,freq_pll,freq_used,freq_source,amplitude,status,status_label,fc,f_ref_used,f_ref_source,gap_ok\n';
     for (let i = 0; i < nf; i++) {
-      const f   = freqSession[i];
-      const p   = interpolatePos(f.t_true_ms);
+      const f     = freqSession[i];
+      const p     = interpolatePos(f.t_true_ms);
       const pos_m = p ? p.pos_m : null;
-      const lo  = Math.max(0, i - HWIN), hi = Math.min(nf - 1, i + HWIN);
-      const pLo = interpolatePos(freqSession[lo].t_true_ms);
-      const pHi = interpolatePos(freqSession[hi].t_true_ms);
-      let vel_ms = 0;
+      const lo    = Math.max(0, i - HWIN), hi = Math.min(nf - 1, i + HWIN);
+      const pLo   = interpolatePos(freqSession[lo].t_true_ms);
+      const pHi   = interpolatePos(freqSession[hi].t_true_ms);
+      let vel_ms  = 0;
       if (pLo && pHi) {
         const dt = freqSession[hi].elapsed_s - freqSession[lo].elapsed_s;
         if (dt > 0) vel_ms = (pHi.pos_m - pLo.pos_m) / dt;
       }
-
-      const pos_str  = pos_m !== null ? pos_m.toFixed(6)  : '';
-      const amp_str  = f.amplitude    != null ? f.amplitude.toFixed(4) : '';
-      const fc_str   = f.fc           != null ? f.fc.toFixed(2) : '';
-      const scan_str = f.freq_scan  > 0 ? f.freq_scan.toFixed(2)  : '-1';
-      const ph_str   = f.freq_phase > 0 ? f.freq_phase.toFixed(2) : '-1';
-      const pll_str  = f.freq_pll   > 0 ? f.freq_pll.toFixed(2)   : '-1';
-      const used     = getFreqUsed(f);
-      const used_str = used !== null ? used.toFixed(2) : '-1';
-      const src_str  = f.freq_pll > 0 ? 'pll'
-                       : isPhasePointUsable(f) ? 'phase'
-                       : isScanPointUsable(f) ? 'scan'
-                       : 'none';
-      const fref_str = fRefUsed.toFixed(2);
-      out += `${f.elapsed_s.toFixed(4)},${pos_str},${vel_ms.toFixed(6)},` +
-             `${scan_str},${ph_str},${pll_str},${used_str},${src_str},${amp_str},${f.status},${getStatusLabel(f.status)},${fc_str},${fref_str},${fRefSource},${f.gap_ok}\n`;
+      const used    = getFreqUsed(f);
+      const src_str = f.freq_pll > 0 ? 'pll' : isPhasePointUsable(f) ? 'phase' : 'none';
+      out += `${f.elapsed_s.toFixed(4)},` +
+             `${pos_m !== null ? pos_m.toFixed(6) : ''},` +
+             `${vel_ms.toFixed(6)},` +
+             `${f.freq_phase > 0 ? f.freq_phase.toFixed(2) : '-1'},` +
+             `${f.freq_pll   > 0 ? f.freq_pll.toFixed(2)   : '-1'},` +
+             `${used !== null ? used.toFixed(2) : '-1'},` +
+             `${src_str},` +
+             `${f.amplitude != null ? f.amplitude.toFixed(4) : ''},` +
+             `${f.status},TRACKING,` +
+             `${f.fc != null ? f.fc.toFixed(2) : ''},` +
+             `${fRefUsed.toFixed(2)},${fRefSource},${f.gap_ok}\n`;
     }
     return out;
   }
@@ -1740,14 +1460,10 @@ document.getElementById('btnReset').addEventListener('click', resetAll);
 document.getElementById('btnCsv').addEventListener('click',   showCsvModal);
 
 document.getElementById('btnRecal').addEventListener('click', () => sendCmd('RECAL'));
-
 document.getElementById('btnSetFc').addEventListener('click', () => {
   const val = parseFloat(document.getElementById('fcInput').value);
-  if (!isNaN(val) && val > 800 && val < 1200) {
-    sendCmd(`FC:${val.toFixed(2)}`);
-  } else {
-    log('[CMD] Invalid fc value');
-  }
+  if (!isNaN(val) && val > 800 && val < 1200) sendCmd(`FC:${val.toFixed(2)}`);
+  else log('[CMD] Invalid fc value');
 });
 
 document.getElementById('btnCloseModal').addEventListener('click', () => {
@@ -1762,10 +1478,8 @@ document.getElementById('btnDownload').addEventListener('click', () => {
   const blob = new Blob([buildCsv()], { type: 'text/csv' });
   const url  = URL.createObjectURL(blob);
   const a    = document.createElement('a');
-  a.href     = url;
-  a.download = `doppler_phase_${new Date().toISOString().replace(/[:.]/g, '-')}.csv`;
-  a.click();
-  URL.revokeObjectURL(url);
+  a.href = url; a.download = `doppler_phase_${new Date().toISOString().replace(/[:.]/g, '-')}.csv`;
+  a.click(); URL.revokeObjectURL(url);
 });
 
 // ─── Canvas リサイズ ────────────────────────────────
@@ -1787,36 +1501,17 @@ function rebuildFreqDualValues() {
   freqTimeValues = slice.map(s => s.elapsed_s);
 }
 
-document.getElementById('scanAmpSlider').addEventListener('input', function () {
-  scanAmpThreshold = parseInt(this.value, 10);
-  document.getElementById('scanAmpSliderVal').textContent = scanAmpThreshold;
-  rebuildFreqDualValues();
-  drawFreqDualChart(ctxFreq, freqDualValues, freqTimeValues, document.getElementById('freqAxisLabel'));
-  drawScatter();
-  updateStats();
-});
-
 document.getElementById('phaseAmpSlider').addEventListener('input', function () {
   phaseAmpThreshold = parseInt(this.value, 10);
   document.getElementById('phaseAmpSliderVal').textContent = phaseAmpThreshold;
   rebuildFreqDualValues();
-  lastDphi0Hz = estimateStaticPhaseOffsetHz();
   updateCalPanel();
   drawFreqDualChart(ctxFreq, freqDualValues, freqTimeValues, document.getElementById('freqAxisLabel'));
   drawScatter();
   updateStats();
 });
-
 document.getElementById('phaseAmpSliderVal').textContent = phaseAmpThreshold;
 
-// ─── スキャン法表示トグル ────────────────────────────
-document.getElementById('chkShowScan').addEventListener('change', function () {
-  showScan = this.checked;
-  drawFreqDualChart(ctxFreq, freqDualValues, freqTimeValues, document.getElementById('freqAxisLabel'));
-  drawScatter();
-});
-
-// ─── 初期 cal パネル表示 ────────────────────────────
 updateCalPanel();
 </script>
 </body>
