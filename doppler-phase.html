@@ -475,6 +475,8 @@ let lastPositionNotifyMs = 0;    // 最後の位置 notify 受信時刻（stale 
 // JS 側安全網（ファームウェア更新前の旧機との互換）
 let lastValidFreqScan = -1;
 let jsScanMissCount   = 0;
+let lastValidFreqPll  = -1;
+let jsPllMissCount    = 0;
 
 // ═══════════════════════════════════════════════════════
 //  Freq Sensor (ESP32) 状態
@@ -543,18 +545,22 @@ function isPhasePointUsable(f) {
   return !!f && f.gap_ok && f.freq_phase > 0 && f.amplitude >= phaseAmpThreshold;
 }
 
+function isPllPointUsable(f) {
+  return !!f && f.gap_ok && f.freq_pll > 0 && f.amplitude >= phaseAmpThreshold;
+}
+
 function buildDualPoint(f) {
   return {
     scan:  isScanPointUsable(f)  ? f.freq_scan  : null,
     phase: isPhasePointUsable(f) ? f.freq_phase : null,
-    pll:   (f && f.gap_ok && f.freq_pll > 0) ? f.freq_pll : null,
+    pll:   isPllPointUsable(f)   ? f.freq_pll   : null,
     amp:   f ? f.amplitude : null
   };
 }
 
 function getFreqUsed(f) {
   if (!f || !f.gap_ok) return null;
-  if (f.freq_pll > 0) return f.freq_pll;
+  if (isPllPointUsable(f)) return f.freq_pll;
   if (isPhasePointUsable(f)) return f.freq_phase;
   if (isScanPointUsable(f)) return f.freq_scan;
   return null;
@@ -726,7 +732,7 @@ function onFreqNotify(event) {
 
   const t_esp_s = parseFloat(parts[0]);
 
-  // 8フィールド (PLL対応) / 7フィールド (旧) / 3フィールド (最旧) の互換対応
+  // 8フィールド (PLL対応) / 7フィールド (旧) / 4フィールド (simple PLL) / 3フィールド (最旧) の互換対応
   let freq_scan, freq_phase, freq_pll = -1, amplitude, status, fc_val, cal_progress;
   if (parts.length >= 8) {
     freq_scan    = parseFloat(parts[1]);
@@ -743,6 +749,14 @@ function onFreqNotify(event) {
     status       = parseInt(parts[4]);
     fc_val       = parseFloat(parts[5]);
     cal_progress = parseInt(parts[6]);
+  } else if (parts.length === 4) {
+    amplitude    = parseFloat(parts[1]);
+    fc_val       = parseFloat(parts[2]);
+    freq_pll     = parseFloat(parts[3]);
+    freq_scan    = -1;
+    freq_phase   = -1;
+    status       = 2;
+    cal_progress = 0;
   } else {
     freq_scan    = parseFloat(parts[1]);
     freq_phase   = -1;
@@ -802,9 +816,23 @@ function onFreqNotify(event) {
   }
   if (freq_scan < 0 && ++jsScanMissCount > 3) lastValidFreqScan = -1;
 
+  // PLL 連続性チェック（1フレームで 4Hz 超の補正は phase slip とみなす）
+  if (freq_pll > 0) {
+    if (lastValidFreqPll > 0 && Math.abs(freq_pll - lastValidFreqPll) > 4) {
+      freq_pll = -1;
+    } else {
+      lastValidFreqPll = freq_pll;
+      jsPllMissCount   = 0;
+    }
+  }
+  if (freq_pll < 0 && ++jsPllMissCount > 2) lastValidFreqPll = -1;
+
   // 物理的範囲チェック（最大 Δf ≈ fc×v/c、v=4.1 m/s → ±12 Hz）
   if (freq_phase > 0 && fc_val > 0 && Math.abs(freq_phase - fc_val) > 12) {
     freq_phase = -1;
+  }
+  if (freq_pll > 0 && fc_val > 0 && Math.abs(freq_pll - fc_val) > 12) {
+    freq_pll = -1;
   }
   // ───────────────────────────────────────────────────────────────
 
@@ -1573,6 +1601,7 @@ function resetAll() {
   notifyReceived = false; lastNotifyTime = 0; lastNotifyPos = 0; notifyPacketCount = 0;
   postResetGuard = 3;   // 次の3パケットで大ジャンプが来たら捨てる
   lastValidFreqScan = -1; jsScanMissCount = 0;
+  lastValidFreqPll = -1; jsPllMissCount = 0;
   // PASCO Smart Cart エンコーダをゼロ点リセット
   if (posCmdChar) {
     posCmdChar.writeValueWithoutResponse(new Uint8Array([0x05, 0x01]))
