@@ -247,30 +247,21 @@
     <button class="btn-stop"  id="btnStop"  disabled>Stop</button>
     <button class="btn-reset" id="btnReset" disabled>Reset</button>
     <button class="btn-csv"   id="btnCsv"   disabled>CSV Export</button>
-    <label style="display:flex;align-items:center;gap:7px;font-size:0.78rem;color:var(--dim);margin-left:10px;">
-      Phase Amp ≥
-      <input type="range" id="phaseAmpSlider" min="0" max="100" step="1" value="18"
-             style="width:80px;accent-color:var(--col-phase);">
-      <span id="phaseAmpSliderVal" style="font-family:'Share Tech Mono',monospace;min-width:2.5em;">18</span>
-    </label>
   </div>
 
-  <!-- ─── キャリブレーションパネル ─────────────── -->
+  <!-- ─── f_c パネル ──────────────────────────── -->
   <div class="cal-panel" id="calPanel">
     <div class="cal-header">
-      <span class="cal-title">Calibration — Nominal Start + Static Auto-Zero</span>
-      <span class="cal-state-badge" id="calStateBadge">
-        <span class="cal-dot blink"></span>
-        <span id="calStateText">WAITING</span>
-      </span>
+      <span class="cal-title">Reference Frequency — Static Auto-Zero</span>
     </div>
     <div class="cal-body">
       <div class="cal-info">
         <div><span class="cal-fc-val" id="calFcVal">f_c(ref) = —</span></div>
         <div class="cal-offset" id="calOffsetVal"></div>
         <div class="cal-offset" id="calDphi0Val"></div>
+        <div class="cal-offset" id="calAmpVal" style="color:var(--col-phase);"></div>
       </div>
-      <div class="cal-progress-wrap" id="calProgressWrap">
+      <div class="cal-progress-wrap" id="calProgressWrap" style="display:none;">
         <div class="cal-progress-label">
           <span id="calProgressLabel">センサー未接続</span>
           <span id="calProgressCount"></span>
@@ -340,7 +331,6 @@
       <div class="chart-header">
         <div class="chart-title">Frequency (Hz)</div>
         <div class="freq-legend">
-          <span><span class="legend-dot" style="background:var(--col-phase);"></span>位相追跡法</span>
           <span><span class="legend-dot" style="background:var(--col-pll);"></span>PLL</span>
         </div>
         <div id="freqAxisLabel" style="font-family:'Share Tech Mono',monospace;font-size:0.7rem;color:var(--dim);"></div>
@@ -447,9 +437,9 @@ let timeAlignOffsetMs = SAMPLING_TAIL_MS;
 let derivedFc         = null;
 let derivedFcLocked   = false;
 
-let lastCalStatus   = -1;   // -1=未接続, 2=TRACKING
-let lastFc          = 1000.0;
-let lastCalProgress = 0;
+let lastFc = 1000.0;
+let liveAmplitude   = null;
+let freqPacketCount = 0;
 
 // ═══════════════════════════════════════════════════════
 //  録画状態
@@ -471,7 +461,6 @@ let posTimeValues   = [];
 let freqDualValues  = [];
 let freqTimeValues  = [];
 
-let phaseAmpThreshold = 18;
 const VEL_SMOOTH_WIN  = 5;
 
 // ═══════════════════════════════════════════════════════
@@ -487,24 +476,7 @@ function getReferenceFc() {
   return derivedFc !== null ? derivedFc : lastFc;
 }
 
-function isPhasePointUsable(f) {
-  return !!f && f.gap_ok && f.freq_phase > 0 && f.amplitude >= phaseAmpThreshold;
-}
-
-function buildDualPoint(f) {
-  return {
-    phase: isPhasePointUsable(f) ? f.freq_phase : null,
-    pll:   (f && f.gap_ok && f.freq_pll > 0) ? f.freq_pll : null,
-    amp:   f ? f.amplitude : null
-  };
-}
-
-function getFreqUsed(f) {
-  if (!f || !f.gap_ok) return null;
-  if (f.freq_pll > 0) return f.freq_pll;
-  if (isPhasePointUsable(f)) return f.freq_phase;
-  return null;
-}
+function freqValid(f) { return f && f.gap_ok && f.freq_pll > 0; }
 
 function updateDerivedFc() {
   const STATIC_VEL_MAX = 0.08;
@@ -513,9 +485,8 @@ function updateDerivedFc() {
   const staticVals = freqSession
     .filter(f => f.elapsed_s <= EARLY_WINDOW_S)
     .map(f => {
-      const p    = interpolatePos(f.t_true_ms);
-      const used = getFreqUsed(f);
-      return (p && used !== null && Math.abs(p.vel_ms) <= STATIC_VEL_MAX) ? used : null;
+      const p = interpolatePos(f.t_true_ms);
+      return (p && freqValid(f) && Math.abs(p.vel_ms) <= STATIC_VEL_MAX) ? f.freq_pll : null;
     })
     .filter(v => v !== null);
 
@@ -540,58 +511,36 @@ function log(msg) {
 //  キャリブレーションパネル更新
 // ═══════════════════════════════════════════════════════
 function updateCalPanel() {
-  const panel  = document.getElementById('calPanel');
-  const badge  = document.getElementById('calStateBadge');
-  const stTxt  = document.getElementById('calStateText');
   const fcVal  = document.getElementById('calFcVal');
   const offVal = document.getElementById('calOffsetVal');
   const dp0Val = document.getElementById('calDphi0Val');
-  const pgWrap = document.getElementById('calProgressWrap');
-  const pgLbl  = document.getElementById('calProgressLabel');
-  const pgCnt  = document.getElementById('calProgressCount');
-  const pgFill = document.getElementById('calProgressFill');
 
-  const isTracking = lastCalStatus === 2;
-
-  panel.className = 'cal-panel' + (isTracking ? ' tracking-state' : '');
-  badge.className = 'cal-state-badge' + (isTracking ? ' tracking-state' : '');
-  stTxt.textContent = isTracking ? 'TRACKING ✓' : 'WAITING';
-
-  const dot = badge.querySelector('.cal-dot');
-  if (dot) dot.className = 'cal-dot' + (isTracking ? '' : ' blink');
-
-  if (isTracking || isFreqConnected) {
+  const ampEl = document.getElementById('calAmpVal');
+  if (isFreqConnected) {
     const refFc = getReferenceFc();
     fcVal.textContent  = `f_c(ref) = ${refFc.toFixed(2)} Hz`;
-    offVal.textContent = `nominal/start: ${lastFc.toFixed(2)} Hz`;
-  } else {
-    fcVal.textContent  = 'f_c(ref) = waiting…';
-    offVal.textContent = '';
-  }
-
-  if (isTracking) {
-    pgFill.style.width = derivedFcLocked ? '100%' : (derivedFc !== null ? '72%' : '32%');
-    pgFill.className   = 'cal-progress-fill tracking-state';
-    pgLbl.textContent  = derivedFcLocked       ? '静止区間から参照周波数を確定'   :
-                         derivedFc !== null     ? '静止区間から参照周波数を推定中' :
-                                                  'nominal 1000 Hz で TRACKING 開始';
-    pgCnt.textContent  = derivedFc !== null ? `ref ${derivedFc.toFixed(2)} Hz` : 'ref pending';
-    pgWrap.style.display = '';
-    const inp = document.getElementById('fcInput');
-    if (!inp.value) inp.value = getReferenceFc().toFixed(2);
-  } else {
-    pgWrap.style.display = 'none';
-  }
-
-  if (isTracking || isFreqConnected) {
+    offVal.textContent = `PLL start: ${lastFc.toFixed(2)} Hz`;
     if (derivedFc !== null) {
       const err = derivedFc - lastFc;
       dp0Val.textContent = `auto-zero補正: ${err >= 0 ? '+' : ''}${err.toFixed(3)} Hz`;
     } else {
       dp0Val.textContent = '静止区間が十分に集まると f_c(ref) を自動確定';
     }
+    if (liveAmplitude !== null) {
+      const ok = liveAmplitude >= 30;
+      ampEl.textContent = `IQ amp: ${liveAmplitude.toFixed(1)}  (閾値30 → ${ok ? '✓ OK' : '✗ 弱すぎ'})`;
+      ampEl.style.color = ok ? 'var(--accent2)' : 'var(--danger)';
+    } else {
+      ampEl.textContent = 'IQ amp: —';
+      ampEl.style.color = '';
+    }
+    const inp = document.getElementById('fcInput');
+    if (!inp.value) inp.value = refFc.toFixed(2);
   } else {
+    fcVal.textContent  = 'f_c(ref) = —';
+    offVal.textContent = '';
     dp0Val.textContent = '';
+    if (ampEl) { ampEl.textContent = ''; }
   }
 }
 
@@ -660,42 +609,28 @@ function handlePositionNotify(event) {
 function onFreqNotify(event) {
   const raw   = new TextDecoder().decode(event.target.value).trim();
   const parts = raw.split(',');
-  if (parts.length < 2) return;
+  freqPacketCount++;
+  if (parts.length < 2) { log(`[freq] malformed pkt: "${raw}"`); return; }
 
   const t_esp_s = parseFloat(parts[0]);
 
-  // 8フィールド (PLL) / 7フィールド (旧位相版) / 3フィールド (最旧) 互換
-  let freq_phase, freq_pll = -1, amplitude, status, fc_val, cal_progress;
-  if (parts.length >= 8) {
-    freq_phase   = parseFloat(parts[2]);
-    amplitude    = parseFloat(parts[3]);
-    status       = parseInt(parts[4]);
-    fc_val       = parseFloat(parts[5]);
-    cal_progress = parseInt(parts[6]);
-    freq_pll     = parseFloat(parts[7]);
-  } else if (parts.length >= 7) {
-    freq_phase   = parseFloat(parts[2]);
-    amplitude    = parseFloat(parts[3]);
-    status       = parseInt(parts[4]);
-    fc_val       = parseFloat(parts[5]);
-    cal_progress = parseInt(parts[6]);
-  } else {
-    freq_phase   = -1;
-    amplitude    = parts.length >= 3 ? parseFloat(parts[2]) : 0;
-    status       = 2;
-    fc_val       = 1000.0;
-    cal_progress = 0;
+  // 4フィールド: t_esp_s,amplitude,fc,freq_pll
+  if (parts.length < 4) {
+    log(`[freq] フィールド数不足 (${parts.length}フィールド, 4必要): "${raw}"`);
+    log('[freq] → 旧ファームウェアが動作中の可能性。doppler-cart-phase-simple.inoを書き込んでください。');
+    return;
+  }
+  let amplitude = parseFloat(parts[1]);
+  let fc_val    = parseFloat(parts[2]);
+  let freq_pll  = parseFloat(parts[3]);
+
+  liveAmplitude = amplitude;
+  if (freqPacketCount <= 5) {
+    log(`[freq] pkt#${freqPacketCount}: amp=${amplitude.toFixed(1)} fc=${fc_val.toFixed(2)} pll=${freq_pll.toFixed(2)}`);
   }
 
-  if (lastCalStatus !== status || Math.abs(lastFc - fc_val) > 0.01) {
-    lastCalStatus   = status;
-    lastFc          = fc_val;
-    lastCalProgress = cal_progress;
-    updateCalPanel();
-  } else if (lastCalProgress !== cal_progress) {
-    lastCalProgress = cal_progress;
-    updateCalPanel();
-  }
+  if (Math.abs(lastFc - fc_val) > 0.01) lastFc = fc_val;
+  updateCalPanel();
 
   if (!isRecording) return;
 
@@ -716,17 +651,12 @@ function onFreqNotify(event) {
   }
   prevFreqEspTime = t_esp_s;
 
-  // 物理的範囲チェック（v=4.1 m/s → ±12 Hz）
-  // PLL ロック中は freq_pll を基準にする（名目 1000 Hz 基準だと高速時に誤棄却）
-  const _phaseRef = freq_pll > 0 ? freq_pll : fc_val;
-  if (freq_phase > 0 && Math.abs(freq_phase - _phaseRef) > 12) freq_phase = -1;
-
-  const sample = { t_true_ms, elapsed_s, freq_phase, freq_pll, amplitude, status, fc: fc_val, gap_ok };
+  const sample = { t_true_ms, elapsed_s, freq_pll, amplitude, fc: fc_val, gap_ok };
   freqSession.push(sample);
   updateDerivedFc();
   updateCalPanel();
 
-  freqDualValues.push(buildDualPoint(sample));
+  freqDualValues.push(freqValid(sample) ? sample.freq_pll : null);
   freqTimeValues.push(sample.elapsed_s);
   if (freqDualValues.length > MAX_POINTS) { freqDualValues.shift(); freqTimeValues.shift(); }
 
@@ -912,25 +842,21 @@ function drawVelChart(ctx, rawData, smoothData, times, labelEl) {
 }
 
 // ═══════════════════════════════════════════════════════
-//  周波数チャート（位相追跡法 + PLL）
+//  周波数チャート（PLL）
 // ═══════════════════════════════════════════════════════
-function drawFreqDualChart(ctx, dualData, times, labelEl) {
+function drawFreqDualChart(ctx, pllData, times, labelEl) {
   const W = ctx.canvas.width, H = ctx.canvas.height;
   ctx.clearRect(0, 0, W, H); ctx.fillStyle = '#f8fbff'; ctx.fillRect(0, 0, W, H);
-  if (dualData.length < 2) return;
+  if (pllData.length < 2) return;
 
   const PAD_L = 62, PAD_R = 12, PAD_T = 16, PAD_B = 34;
   const plotW = W - PAD_L - PAD_R, plotH = H - PAD_T - PAD_B;
-  const n = dualData.length;
+  const n = pllData.length;
   const useTimes = times && times.length === n && times[n - 1] > times[0];
   const tMin = useTimes ? times[0] : 0, tMax = useTimes ? times[n - 1] : n - 1;
   const toX = i => PAD_L + ((useTimes ? times[i] : i) - tMin) / (tMax - tMin) * plotW;
 
-  const allVals = [];
-  for (const d of dualData) {
-    if (d.phase !== null) allVals.push(d.phase);
-    if (d.pll   !== null) allVals.push(d.pll);
-  }
+  const allVals = pllData.filter(v => v !== null);
   if (allVals.length < 2) return;
   let min = Math.min(...allVals), max = Math.max(...allVals);
   if (Math.abs(max - min) < 0.5) { min -= 2; max += 2; }
@@ -945,8 +871,8 @@ function drawFreqDualChart(ctx, dualData, times, labelEl) {
     ctx.fillText((max - (k / 4) * range).toFixed(1), PAD_L - 6, y + 4);
   }
 
-  // f_c(ref) 基準線 — 散布図と同じ getReferenceFc() を使う
-  if (lastCalStatus === 2) {
+  // f_c(ref) 基準線
+  if (isFreqConnected) {
     const refVal = getReferenceFc();
     const yfc = toY(refVal);
     if (yfc >= PAD_T && yfc <= PAD_T + plotH) {
@@ -959,58 +885,29 @@ function drawFreqDualChart(ctx, dualData, times, labelEl) {
     }
   }
 
-  // ── 位相追跡法（青・補助線）
-  const highAmpThr = Math.max(phaseAmpThreshold * 2, phaseAmpThreshold + 10);
-
-  ctx.strokeStyle = 'rgba(0,68,204,0.82)'; ctx.lineWidth = 1.9;
-  ctx.beginPath();
-  for (let i = 0; i < n; i++) {
-    const d = dualData[i];
-    if (d.phase === null || d.amp < highAmpThr) continue;
-    const x = toX(i), y = toY(d.phase);
-    const prevOk = i > 0 && dualData[i - 1].phase !== null && dualData[i - 1].amp >= highAmpThr;
-    prevOk ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
-  }
-  ctx.stroke();
-
-  for (let i = 0; i < n; i++) {
-    const d = dualData[i];
-    if (d.phase === null || d.amp >= highAmpThr) continue;
-    ctx.fillStyle = 'rgba(120,140,170,0.55)';
-    ctx.beginPath(); ctx.arc(toX(i), toY(d.phase), 2, 0, Math.PI * 2); ctx.fill();
-  }
-  for (let i = n - 1; i >= 0; i--) {
-    if (dualData[i].phase !== null) {
-      const isLowConf = dualData[i].amp < highAmpThr;
-      ctx.fillStyle = isLowConf ? 'rgba(120,140,170,0.7)' : '#0044cc';
-      ctx.beginPath(); ctx.arc(toX(i), toY(dualData[i].phase), 4, 0, Math.PI * 2); ctx.fill();
-      break;
-    }
-  }
-
   // ── PLL（紫・実線）
   ctx.save();
   ctx.strokeStyle = 'rgba(170,0,119,0.18)'; ctx.lineWidth = 6;
   ctx.beginPath();
   for (let i = 0; i < n; i++) {
-    const v = dualData[i].pll; if (v === null) continue;
+    const v = pllData[i]; if (v === null) continue;
     const x = toX(i), y = toY(v);
-    (i > 0 && dualData[i - 1].pll !== null) ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    (i > 0 && pllData[i - 1] !== null) ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
   }
   ctx.stroke();
   ctx.strokeStyle = '#aa0077'; ctx.lineWidth = 2.8;
   ctx.beginPath();
   for (let i = 0; i < n; i++) {
-    const v = dualData[i].pll; if (v === null) continue;
+    const v = pllData[i]; if (v === null) continue;
     const x = toX(i), y = toY(v);
-    (i > 0 && dualData[i - 1].pll !== null) ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    (i > 0 && pllData[i - 1] !== null) ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
   }
   ctx.stroke();
   ctx.restore();
 
   for (let i = n - 1; i >= 0; i--) {
-    if (dualData[i].pll !== null) {
-      const x = toX(i), y = toY(dualData[i].pll);
+    if (pllData[i] !== null) {
+      const x = toX(i), y = toY(pllData[i]);
       ctx.fillStyle = '#aa0077';
       ctx.beginPath(); ctx.arc(x, y, 4.5, 0, Math.PI * 2); ctx.fill();
       ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.lineWidth = 1.5;
@@ -1028,18 +925,7 @@ function drawFreqDualChart(ctx, dualData, times, labelEl) {
 // ═══════════════════════════════════════════════════════
 function getFRef() {
   if (derivedFc !== null) return derivedFc;
-  if (lastCalStatus === 2 && lastFc > 0) return lastFc;
-  const vals = freqSession
-    .filter(isPhasePointUsable)
-    .map(f => {
-      const p = interpolatePos(f.t_true_ms);
-      return p && Math.abs(p.vel_ms) < 0.08 ? f.freq_phase : null;
-    })
-    .filter(v => v !== null);
-  if (vals.length >= 3) {
-    vals.sort((a, b) => a - b);
-    return vals[Math.floor(vals.length / 2)];
-  }
+  if (isFreqConnected && lastFc > 0) return lastFc;
   return 1000.0;
 }
 
@@ -1104,8 +990,7 @@ function drawScatter() {
 
   for (let i = 0; i < n; i++) {
     const f     = freqSession[i];
-    const fUsed = getFreqUsed(f);
-    if (fUsed === null) continue;
+    if (!freqValid(f)) continue;
     const lo  = Math.max(0, i - HALF_WIN), hi = Math.min(n - 1, i + HALF_WIN);
     const pLo = interpolatePos(freqSession[lo].t_true_ms);
     const pHi = interpolatePos(freqSession[hi].t_true_ms);
@@ -1114,11 +999,11 @@ function drawScatter() {
     if (dt <= 0) continue;
     const v = (pHi.pos_m - pLo.pos_m) / dt;
     if (Math.abs(v) > 5) continue;
-    const df = fUsed - fRef;
+    const df = f.freq_pll - fRef;
     const x = toX(v), y = toY(df);
     if (x < PAD_L || x > PAD_L + plotW || y < PAD_T || y > PAD_T + plotH) continue;
     ctxScatter.beginPath(); ctxScatter.arc(x, y, 5, 0, Math.PI * 2);
-    ctxScatter.fillStyle = f.freq_pll > 0 ? 'rgba(170,0,119,0.55)' : 'rgba(0,68,204,0.65)';
+    ctxScatter.fillStyle = 'rgba(170,0,119,0.55)';
     ctxScatter.fill();
     nMain++;
   }
@@ -1131,7 +1016,7 @@ function drawScatter() {
 
   const infoEl = document.getElementById('scatterInfo');
   if (infoEl) infoEl.textContent =
-    `phase amp≥${phaseAmpThreshold} / align ${timeAlignOffsetMs.toFixed(0)} ms: ${nMain} pts`;
+    `align ${timeAlignOffsetMs.toFixed(0)} ms: ${nMain} pts`;
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1147,22 +1032,19 @@ function updateStats() {
   }
 
   const validUsed = freqSession
-    .map(f => ({ sample: f, used: getFreqUsed(f) }))
-    .filter(e => e.used !== null);
+    .filter(freqValid);
 
   if (validUsed.length > 0) {
     const last = validUsed[validUsed.length - 1];
-    const src  = last.sample.freq_pll > 0 ? 'PLL' : 'PHASE';
-    document.getElementById('sFreqPhase').textContent = `${last.used.toFixed(2)} Hz`;
-    document.getElementById('sFreqPll').textContent   = `${src} / TRACKING`;
+    document.getElementById('sFreqPhase').textContent = `${last.freq_pll.toFixed(2)} Hz`;
+    document.getElementById('sFreqPll').textContent   = 'PLL / TRACKING';
   }
 
   const lastSample   = freqSession.length > 0 ? freqSession[freqSession.length - 1] : null;
   const lastAmp      = lastSample ? lastSample.amplitude : 0;
-  const lowAmpCount  = freqSession.filter(f => f.amplitude < phaseAmpThreshold).length;
-  const invalidCount = freqSession.filter(f => getFreqUsed(f) === null).length;
+  const invalidCount = freqSession.filter(f => !freqValid(f)).length;
   document.getElementById('sAmplitude').textContent =
-    `IQ amp: ${lastAmp.toFixed(0)} / f_ref: ${getReferenceFc().toFixed(2)} Hz / lowAmp ${lowAmpCount} / invalid ${invalidCount}`;
+    `IQ amp: ${lastAmp.toFixed(0)} / f_ref: ${getReferenceFc().toFixed(2)} Hz / invalid ${invalidCount}`;
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1267,7 +1149,6 @@ async function connectFreqSensor() {
 
     isFreqConnected = true;
     setFreqStatus('CONNECTED: ' + freqDevice.name, true);
-    lastCalStatus = -1;
     updateCalPanel();
     updateButtonStates();
   } catch (e) {
@@ -1284,7 +1165,8 @@ function onFreqDisconnected() {
   timeAlignOffsetMs = SAMPLING_TAIL_MS;
   derivedFc         = null;
   derivedFcLocked   = false;
-  lastCalStatus     = -1;
+  liveAmplitude     = null;
+  freqPacketCount   = 0;
   setFreqStatus('DISCONNECTED');
   document.getElementById('btnRecal').disabled = true;
   document.getElementById('btnSetFc').disabled = true;
@@ -1358,6 +1240,7 @@ function resetAll() {
   prevFreqEspTime = -1; firstFreqEspTime = -1; firstFreqRecvMs = -1;
   timeAlignOffsetMs = SAMPLING_TAIL_MS;
   derivedFc = null; derivedFcLocked = false;
+  freqPacketCount = 0;
   posSession = []; freqSession = [];
   posValues = []; velValues = []; velSmoothValues = []; posTimeValues = [];
   freqDualValues = []; freqTimeValues = [];
@@ -1406,7 +1289,7 @@ function buildCsv() {
     const fRefSource = derivedFc !== null ? 'static_auto' : 'nominal';
     const nf   = freqSession.length;
     const HWIN = 3;
-    let out = 'elapsed_s,pos_m,vel_ms,freq_phase,freq_pll,freq_used,freq_source,amplitude,status,status_label,fc,f_ref_used,f_ref_source,gap_ok\n';
+    let out = 'elapsed_s,pos_m,vel_ms,freq_pll,amplitude,fc,f_ref_used,f_ref_source,gap_ok\n';
     for (let i = 0; i < nf; i++) {
       const f     = freqSession[i];
       const p     = interpolatePos(f.t_true_ms);
@@ -1419,17 +1302,11 @@ function buildCsv() {
         const dt = freqSession[hi].elapsed_s - freqSession[lo].elapsed_s;
         if (dt > 0) vel_ms = (pHi.pos_m - pLo.pos_m) / dt;
       }
-      const used    = getFreqUsed(f);
-      const src_str = f.freq_pll > 0 ? 'pll' : isPhasePointUsable(f) ? 'phase' : 'none';
       out += `${f.elapsed_s.toFixed(4)},` +
              `${pos_m !== null ? pos_m.toFixed(6) : ''},` +
              `${vel_ms.toFixed(6)},` +
-             `${f.freq_phase > 0 ? f.freq_phase.toFixed(2) : '-1'},` +
-             `${f.freq_pll   > 0 ? f.freq_pll.toFixed(2)   : '-1'},` +
-             `${used !== null ? used.toFixed(2) : '-1'},` +
-             `${src_str},` +
+             `${f.freq_pll > 0 ? f.freq_pll.toFixed(2) : '-1'},` +
              `${f.amplitude != null ? f.amplitude.toFixed(4) : ''},` +
-             `${f.status},TRACKING,` +
              `${f.fc != null ? f.fc.toFixed(2) : ''},` +
              `${fRefUsed.toFixed(2)},${fRefSource},${f.gap_ok}\n`;
     }
@@ -1493,24 +1370,6 @@ function resizeCanvases() {
 }
 window.addEventListener('resize', resizeCanvases);
 resizeCanvases();
-
-// ─── 振幅スライダー ─────────────────────────────────
-function rebuildFreqDualValues() {
-  const slice = freqSession.slice(-MAX_POINTS);
-  freqDualValues = slice.map(buildDualPoint);
-  freqTimeValues = slice.map(s => s.elapsed_s);
-}
-
-document.getElementById('phaseAmpSlider').addEventListener('input', function () {
-  phaseAmpThreshold = parseInt(this.value, 10);
-  document.getElementById('phaseAmpSliderVal').textContent = phaseAmpThreshold;
-  rebuildFreqDualValues();
-  updateCalPanel();
-  drawFreqDualChart(ctxFreq, freqDualValues, freqTimeValues, document.getElementById('freqAxisLabel'));
-  drawScatter();
-  updateStats();
-});
-document.getElementById('phaseAmpSliderVal').textContent = phaseAmpThreshold;
 
 updateCalPanel();
 </script>
