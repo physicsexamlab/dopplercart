@@ -114,6 +114,11 @@
   .chart-panel.pos  { border-top: 2px solid var(--col-pos); }
   .chart-panel.vel  { border-top: 2px solid var(--col-vel); }
   .chart-panel.freq { border-top: 2px solid var(--col-freq); }
+  .shared-time-axis {
+    font-family: 'Share Tech Mono', monospace; font-size: 0.72rem;
+    color: var(--dim); text-align: center; letter-spacing: 0.08em;
+    text-transform: uppercase; margin-top: -6px;
+  }
   .chart-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 12px; }
   .chart-title  { font-size: 0.7rem; letter-spacing: 0.15em; text-transform: uppercase; color: var(--dim); }
 
@@ -210,6 +215,8 @@
       </div>
       <canvas id="chartFreq" height="180"></canvas>
     </div>
+    <div class="shared-time-axis">Time (s)</div>
+
     <div class="chart-panel" style="border-top:2px solid #444;">
       <div class="chart-header">
         <div class="chart-title">Doppler Scatter — v (m/s) vs. Δf = f<sub>obs</sub> − f₀ (Hz)</div>
@@ -268,12 +275,15 @@ const SAMPLE_INTERVAL_MS = 55;
 const MAX_POINTS         = 300;
 
 // ESP32 タイムスタンプ補正:
-//   BLE notify 受信時刻 − SAMPLING_TAIL_MS ≈ サンプリング窓中央（tFreq）
-//   N=800:  窓後半(≈28ms) + Goertzel+BLE(≈10ms) ≈ 37ms
-const SAMPLING_TAIL_MS      = 37;
+//   ファームウェアが窓中点 (t0+t1)/2 を送信するため補正は 0 が理想だが、
+//   BLE 送信遅延(≈5–10ms)を考慮して小さい値を保持。0 にしても実用上問題なし。
+const SAMPLING_TAIL_MS      = 0;
 
 // 55ms インターバルで 180ms 超のギャップ = 3 パケット以上欠落
 const FREQ_GAP_THRESHOLD_MS = 180;
+
+// CSV 出力・散布図で使う速度計算の半窓幅（中央差分の ±HALF_WIN フレーム）
+const CSV_VEL_HALF_WIN = 1;
 
 // ═══════════════════════════════════════════════
 //  Smart Cart 状態
@@ -320,6 +330,8 @@ let posValues       = [];
 let velValues       = [];
 let velSmoothValues = [];  // 5点トレーリング平均
 let freqValues      = [];
+let posTimeValues   = [];  // 位置サンプルの elapsed_s（時間軸用）
+let freqTimeValues  = [];  // 周波数サンプルの elapsed_s（時間軸用）
 
 // 表示フィルタ・スムージング
 let ampThreshold = 100;   // 振幅フィルタ閾値（スライダーで変更）
@@ -417,10 +429,14 @@ function onFreqNotify(event) {
   // 表示用（freq < 0 は除外、かつ振幅フィルタ）
   if (freq_hz > 0 && (amplitude === null || amplitude >= ampThreshold)) {
     freqValues.push(freq_hz);
-    if (freqValues.length > MAX_POINTS) freqValues.shift();
-    drawChart(ctxFreq, freqValues, '#cc6600',
+    freqTimeValues.push(elapsed_s);
+    if (freqValues.length > MAX_POINTS) { freqValues.shift(); freqTimeValues.shift(); }
+    drawChart(ctxFreq, freqValues, '#cc6600', freqTimeValues,
               document.getElementById('freqAxisLabel'), 'Hz');
   }
+
+  // 散布図をリアルタイム更新（5サンプルに1回）
+  if (freqSession.length % 5 === 0) drawScatter();
 
   updateStats();
 }
@@ -445,14 +461,60 @@ function sampleTick() {
 
   posValues.push(pos);
   velValues.push(vel);
+  posTimeValues.push(elapsed_s);
   // 5点トレーリング平均
   const sliceV = velValues.slice(Math.max(0, velValues.length - VEL_SMOOTH_WIN));
   velSmoothValues.push(sliceV.reduce((a, b) => a + b, 0) / sliceV.length);
-  if (posValues.length > MAX_POINTS) { posValues.shift(); velValues.shift(); velSmoothValues.shift(); }
+  if (posValues.length > MAX_POINTS) { posValues.shift(); velValues.shift(); velSmoothValues.shift(); posTimeValues.shift(); }
 
   updateStats();
-  drawChart(ctxPos, posValues, '#0077cc', document.getElementById('posAxisLabel'), 'm');
-  drawVelChart(ctxVel, velValues, velSmoothValues, document.getElementById('velAxisLabel'));
+  drawChart(ctxPos, posValues, '#0077cc', posTimeValues, document.getElementById('posAxisLabel'), 'm');
+  drawVelChart(ctxVel, velValues, velSmoothValues, posTimeValues, document.getElementById('velAxisLabel'));
+}
+
+// ═══════════════════════════════════════════════
+//  時間軸ヘルパー
+// ═══════════════════════════════════════════════
+function drawTimeAxis(ctx, times, PAD_L, PAD_T, plotW, plotH) {
+  if (!times || times.length < 2) return;
+  const tMin = times[0], tMax = times[times.length - 1];
+  if (tMax <= tMin) return;
+  const toX = t => PAD_L + (t - tMin) / (tMax - tMin) * plotW;
+
+  const span        = tMax - tMin;
+  const targetTicks = Math.max(6, Math.min(10, Math.floor(plotW / 120)));
+  const steps       = [0.2, 0.5, 1, 2, 5, 10, 20, 30, 60];
+  const step        = steps.find(s => span / s <= targetTicks) || 60;
+  const minorStep   = step >= 1 ? step / 2 : step;
+  const yBase       = PAD_T + plotH;
+
+  ctx.save();
+  ctx.font = '10px "Share Tech Mono",monospace';
+  ctx.textAlign = 'center';
+  ctx.lineWidth = 1;
+
+  if (minorStep < step) {
+    for (let s = Math.ceil(tMin / minorStep) * minorStep; s <= tMax + 1e-9; s += minorStep) {
+      if (Math.abs(Math.round(s / step) * step - s) < 1e-6) continue;
+      const x = toX(s);
+      ctx.strokeStyle = 'rgba(160,185,210,0.18)';
+      ctx.beginPath(); ctx.moveTo(x, PAD_T); ctx.lineTo(x, yBase); ctx.stroke();
+      ctx.strokeStyle = 'rgba(100,120,140,0.4)';
+      ctx.beginPath(); ctx.moveTo(x, yBase); ctx.lineTo(x, yBase + 3); ctx.stroke();
+    }
+  }
+  for (let s = Math.ceil(tMin / step) * step; s <= tMax + 1e-9; s += step) {
+    const x = toX(s);
+    ctx.strokeStyle = 'rgba(160,185,210,0.35)';
+    ctx.beginPath(); ctx.moveTo(x, PAD_T); ctx.lineTo(x, yBase); ctx.stroke();
+    ctx.strokeStyle = 'rgba(100,120,140,0.65)';
+    ctx.beginPath(); ctx.moveTo(x, yBase); ctx.lineTo(x, yBase + 5); ctx.stroke();
+    ctx.fillStyle = '#6b8099';
+    ctx.fillText(Number.isInteger(step) ? s.toFixed(0) : s.toFixed(1), x, yBase + 15);
+  }
+  ctx.strokeStyle = 'rgba(100,120,140,0.3)';
+  ctx.beginPath(); ctx.moveTo(PAD_L, yBase); ctx.lineTo(PAD_L + plotW, yBase); ctx.stroke();
+  ctx.restore();
 }
 
 // ═══════════════════════════════════════════════
@@ -463,14 +525,14 @@ const ctxVel     = document.getElementById('chartVel').getContext('2d');
 const ctxFreq    = document.getElementById('chartFreq').getContext('2d');
 const ctxScatter = document.getElementById('chartScatter').getContext('2d');
 
-function drawChart(ctx, data, color, labelEl, unit) {
+function drawChart(ctx, data, color, times, labelEl, unit) {
   const W = ctx.canvas.width, H = ctx.canvas.height;
   ctx.clearRect(0, 0, W, H);
   ctx.fillStyle = '#f8fbff';
   ctx.fillRect(0, 0, W, H);
   if (data.length < 2) return;
 
-  const PAD_L = 62, PAD_R = 12, PAD_T = 12, PAD_B = 28;
+  const PAD_L = 62, PAD_R = 12, PAD_T = 12, PAD_B = 34;
   const plotW = W - PAD_L - PAD_R;
   const plotH = H - PAD_T - PAD_B;
 
@@ -479,7 +541,9 @@ function drawChart(ctx, data, color, labelEl, unit) {
   const range = max - min;
 
   const toY = v => PAD_T + plotH - ((v - min) / range) * plotH;
-  const toX = i => PAD_L + (i / (data.length - 1)) * plotW;
+  const useTimes = times && times.length === data.length && times[times.length - 1] > times[0];
+  const tMin = useTimes ? times[0] : 0, tMax = useTimes ? times[times.length - 1] : data.length - 1;
+  const toX = i => PAD_L + ((useTimes ? times[i] : i) - tMin) / (tMax - tMin) * plotW;
 
   // グリッド（水平 5 本）
   ctx.strokeStyle = 'rgba(160,185,210,0.5)';
@@ -518,6 +582,8 @@ function drawChart(ctx, data, color, labelEl, unit) {
   ctx.arc(toX(data.length - 1), toY(data[data.length - 1]), 4, 0, Math.PI * 2);
   ctx.fill();
 
+  if (useTimes) drawTimeAxis(ctx, times, PAD_L, PAD_T, plotW, plotH);
+
   if (labelEl) {
     const dec = unit === 'Hz' ? 2 : 3;
     labelEl.textContent =
@@ -528,21 +594,23 @@ function drawChart(ctx, data, color, labelEl, unit) {
 // ═══════════════════════════════════════════════
 //  速度チャート（raw = 薄線、5点平均 = 主線）
 // ═══════════════════════════════════════════════
-function drawVelChart(ctx, rawData, smoothData, labelEl) {
+function drawVelChart(ctx, rawData, smoothData, times, labelEl) {
   const W = ctx.canvas.width, H = ctx.canvas.height;
   ctx.clearRect(0, 0, W, H);
   ctx.fillStyle = '#f8fbff';
   ctx.fillRect(0, 0, W, H);
   if (rawData.length < 2) return;
 
-  const PAD_L = 62, PAD_R = 12, PAD_T = 12, PAD_B = 28;
+  const PAD_L = 62, PAD_R = 12, PAD_T = 12, PAD_B = 34;
   const plotW = W - PAD_L - PAD_R, plotH = H - PAD_T - PAD_B;
   const all = rawData.concat(smoothData);
   let min = Math.min(...all), max = Math.max(...all);
   if (Math.abs(max - min) < 0.001) { min -= 0.1; max += 0.1; }
   const range = max - min;
   const toY = v => PAD_T + plotH - ((v - min) / range) * plotH;
-  const toX = i => PAD_L + (i / (rawData.length - 1)) * plotW;
+  const useTimes = times && times.length === rawData.length && times[times.length - 1] > times[0];
+  const tMin = useTimes ? times[0] : 0, tMax = useTimes ? times[times.length - 1] : rawData.length - 1;
+  const toX = i => PAD_L + ((useTimes ? times[i] : i) - tMin) / (tMax - tMin) * plotW;
 
   // グリッド
   ctx.strokeStyle = 'rgba(160,185,210,0.5)'; ctx.lineWidth = 1;
@@ -575,6 +643,7 @@ function drawVelChart(ctx, rawData, smoothData, labelEl) {
     ctx.fillStyle = '#4a8c00';
     ctx.beginPath(); ctx.arc(toX(smoothData.length-1), toY(smoothData[smoothData.length-1]), 4, 0, Math.PI*2); ctx.fill();
   }
+  if (useTimes) drawTimeAxis(ctx, times, PAD_L, PAD_T, plotW, plotH);
   if (labelEl) {
     const vLast = smoothData.length > 0 ? smoothData[smoothData.length-1] : rawData[rawData.length-1];
     labelEl.textContent = `last(avg) ${vLast.toFixed(3)} m/s  |  min ${min.toFixed(3)} / max ${max.toFixed(3)} m/s`;
@@ -586,7 +655,7 @@ function drawVelChart(ctx, rawData, smoothData, labelEl) {
 // ═══════════════════════════════════════════════
 function computeFRef() {
   const stationaryFreqs = freqSession
-    .filter(f => f.freq_hz > 0 && f.amplitude >= ampThreshold)
+    .filter(f => f.freq_hz > 0 && (f.amplitude ?? 0) >= ampThreshold)
     .map((f, i) => {
       // 対応する位置の速度を確認
       const p = interpolatePos(f.t_true_ms);
@@ -659,8 +728,8 @@ function drawScatter() {
   }
   ctxScatter.stroke();
 
-  // データ点（HALF_WIN=2 で平均化した速度を使用）
-  const HALF_WIN = 2;
+  // データ点（CSV_VEL_HALF_WIN で平均化した速度を使用）
+  const HALF_WIN = CSV_VEL_HALF_WIN;
   const n = freqSession.length;
   let nShown = 0;
   for (let i = 0; i < n; i++) {
@@ -681,7 +750,11 @@ function drawScatter() {
     const aboveThresh = amp >= ampThreshold;
     ctxScatter.beginPath();
     ctxScatter.arc(x, y, aboveThresh ? 5 : 3, 0, Math.PI*2);
-    ctxScatter.fillStyle = aboveThresh ? 'rgba(204,102,0,0.75)' : 'rgba(160,160,160,0.35)';
+    ctxScatter.fillStyle = !f.gap_ok
+      ? 'rgba(200,0,0,0.6)'
+      : aboveThresh
+        ? 'rgba(204,102,0,0.75)'
+        : 'rgba(160,160,160,0.35)';
     ctxScatter.fill();
     if (aboveThresh) nShown++;
   }
@@ -885,6 +958,7 @@ function resetAll() {
   firstFreqEspTime = -1;
   posSession = []; freqSession = [];
   posValues = []; velValues = []; velSmoothValues = []; freqValues = [];
+  posTimeValues = []; freqTimeValues = [];
   ['sPosLast','sVelLast','sFreqLast','sFRefAmp'].forEach(id => {
     document.getElementById(id).textContent = '—';
   });
@@ -938,8 +1012,8 @@ function buildCsv() {
     });
 
     // vel: 周波数フレームに同期した中央差分
-    // 55ms サイクルでは HALF_WIN=1 でおよそ 110ms 幅に相当する
-    const HALF_WIN = 1;
+    // 55ms サイクルでは CSV_VEL_HALF_WIN=1 でおよそ 110ms 幅に相当する
+    const HALF_WIN = CSV_VEL_HALF_WIN;
     for (let i = 0; i < n; i++) {
       const f     = freqSession[i];
       const pos_m = posMerged[i];
@@ -1009,9 +1083,9 @@ function resizeCanvases() {
   for (const ctx of [ctxPos, ctxVel, ctxFreq, ctxScatter]) {
     ctx.canvas.width = ctx.canvas.parentElement.clientWidth - 36;
   }
-  drawChart(ctxPos,  posValues,  '#0077cc', document.getElementById('posAxisLabel'),  'm');
-  drawVelChart(ctxVel, velValues, velSmoothValues, document.getElementById('velAxisLabel'));
-  drawChart(ctxFreq, freqValues, '#cc6600', document.getElementById('freqAxisLabel'), 'Hz');
+  drawChart(ctxPos,  posValues,  '#0077cc', posTimeValues,  document.getElementById('posAxisLabel'),  'm');
+  drawVelChart(ctxVel, velValues, velSmoothValues, posTimeValues, document.getElementById('velAxisLabel'));
+  drawChart(ctxFreq, freqValues, '#cc6600', freqTimeValues, document.getElementById('freqAxisLabel'), 'Hz');
   drawScatter();
 }
 window.addEventListener('resize', resizeCanvases);
@@ -1022,11 +1096,12 @@ document.getElementById('ampSlider').addEventListener('input', function() {
   ampThreshold = parseInt(this.value, 10);
   document.getElementById('ampSliderVal').textContent = ampThreshold;
   // フィルタ変更 → 表示用バッファを再構築
-  freqValues = freqSession
+  const filtered = freqSession
     .filter(f => f.freq_hz > 0 && (f.amplitude || 0) >= ampThreshold)
-    .map(f => f.freq_hz)
     .slice(-MAX_POINTS);
-  drawChart(ctxFreq, freqValues, '#cc6600', document.getElementById('freqAxisLabel'), 'Hz');
+  freqValues     = filtered.map(f => f.freq_hz);
+  freqTimeValues = filtered.map(f => f.elapsed_s);
+  drawChart(ctxFreq, freqValues, '#cc6600', freqTimeValues, document.getElementById('freqAxisLabel'), 'Hz');
   drawScatter();
   updateStats();
 });
