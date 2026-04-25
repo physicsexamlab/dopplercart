@@ -274,16 +274,17 @@ const POS_SCALE          = 0.09895 / 816;  // count → meter
 const SAMPLE_INTERVAL_MS = 55;
 const MAX_POINTS         = 300;
 
-// ESP32 タイムスタンプ補正:
-//   ファームウェアが窓中点 (t0+t1)/2 を送信するため補正は 0 が理想だが、
-//   BLE 送信遅延(≈5–10ms)を考慮して小さい値を保持。0 にしても実用上問題なし。
-const SAMPLING_TAIL_MS      = 0;
+// ESP32 BLE 遅延補正:
+//   t_true_ms = firstFreqRecvMs + elapsed_s*1000 - SAMPLING_TAIL_MS
+//   初回受信時刻を基点に ESP32 内部時計で補外することで BLE ジッターを排除し、
+//   SAMPLING_TAIL_MS (≈37ms) で平均 BLE 伝搬遅延を差し引く。
+const SAMPLING_TAIL_MS      = 37;
 
 // 55ms インターバルで 180ms 超のギャップ = 3 パケット以上欠落
 const FREQ_GAP_THRESHOLD_MS = 180;
 
 // CSV 出力・散布図で使う速度計算の半窓幅（中央差分の ±HALF_WIN フレーム）
-const CSV_VEL_HALF_WIN = 1;
+const CSV_VEL_HALF_WIN = 3;
 
 // ═══════════════════════════════════════════════
 //  Smart Cart 状態
@@ -308,8 +309,9 @@ let notifyPacketCount = 0;
 let freqDevice      = null;
 let freqChar        = null;
 let isFreqConnected = false;
-let prevFreqEspTime = -1;   // gap 検出用（ESP32 内部時刻 [s]）
+let prevFreqEspTime  = -1;   // gap 検出用（ESP32 内部時刻 [s]）
 let firstFreqEspTime = -1;  // elapsed_s 計算基準（ESP32 内部時刻 [s]）
+let firstFreqRecvMs  = -1;  // t_true_ms 計算基準（ブラウザ時刻 [ms]）
 
 // ═══════════════════════════════════════════════
 //  録画状態
@@ -409,9 +411,10 @@ function onFreqNotify(event) {
   if (firstFreqEspTime < 0) firstFreqEspTime = t_esp_s;
   const elapsed_s = t_esp_s - firstFreqEspTime;
 
-  // 位置補間用のブラウザ時刻（補間はブラウザ時刻で行う）
+  // t_true_ms: 初回受信時刻を基点に ESP32 内部時計で補外し BLE ジッターを排除
   const t_recv_ms = performance.now();
-  const t_true_ms = t_recv_ms - SAMPLING_TAIL_MS;
+  if (firstFreqRecvMs < 0) firstFreqRecvMs = t_recv_ms;
+  const t_true_ms = firstFreqRecvMs + elapsed_s * 1000 - SAMPLING_TAIL_MS;
 
   // パケットギャップ検出（ESP32 内部時刻の差分）
   let gap_ok = true;
@@ -903,7 +906,8 @@ async function connectFreqSensor() {
 }
 
 function onFreqDisconnected() {
-  isFreqConnected = false;
+  isFreqConnected  = false;
+  firstFreqRecvMs  = -1;
   setFreqStatus('DISCONNECTED');
   updateButtonStates();
 }
@@ -936,6 +940,7 @@ function startRecording() {
   lastNotifyPos   = 0;
   prevFreqEspTime  = -1;
   firstFreqEspTime = -1;
+  firstFreqRecvMs  = -1;
   samplerTimerId   = setInterval(sampleTick, SAMPLE_INTERVAL_MS);
   updateButtonStates();
 }
@@ -956,6 +961,7 @@ function resetAll() {
   latestVelocity = 0; lastNotifyTime = 0; lastNotifyPos = 0; notifyPacketCount = 0;
   prevFreqEspTime  = -1;
   firstFreqEspTime = -1;
+  firstFreqRecvMs  = -1;
   posSession = []; freqSession = [];
   posValues = []; velValues = []; velSmoothValues = []; freqValues = [];
   posTimeValues = []; freqTimeValues = [];
@@ -1012,7 +1018,7 @@ function buildCsv() {
     });
 
     // vel: 周波数フレームに同期した中央差分
-    // 55ms サイクルでは CSV_VEL_HALF_WIN=1 でおよそ 110ms 幅に相当する
+    // 55ms サイクルでは CSV_VEL_HALF_WIN=3 でおよそ 330ms 幅に相当する
     const HALF_WIN = CSV_VEL_HALF_WIN;
     for (let i = 0; i < n; i++) {
       const f     = freqSession[i];
