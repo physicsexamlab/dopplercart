@@ -332,12 +332,14 @@ let posValues       = [];
 let velValues       = [];
 let velSmoothValues = [];  // 5点トレーリング平均
 let freqValues      = [];
+let freqWValues     = [];  // 振幅加重平均周波数（トレーリング窓）
 let posTimeValues   = [];  // 位置サンプルの elapsed_s（時間軸用）
 let freqTimeValues  = [];  // 周波数サンプルの elapsed_s（時間軸用）
 
 // 表示フィルタ・スムージング
 let ampThreshold = 100;   // 振幅フィルタ閾値（スライダーで変更）
-const VEL_SMOOTH_WIN = 5; // 速度平均窓幅
+const VEL_SMOOTH_WIN  = 5; // 速度平均窓幅
+const FREQ_W_HALF_WIN = CSV_VEL_HALF_WIN; // 周波数振幅加重平均の半窓幅（=3フレーム≈165ms）
 
 // ═══════════════════════════════════════════════
 //  BLE notify コールバック（Smart Cart 位置）
@@ -429,13 +431,17 @@ function onFreqNotify(event) {
 
   freqSession.push({ t_true_ms, elapsed_s, freq_hz, gap_ok, amplitude });
 
+  // 振幅加重平均（トレーリング窓）
+  const freq_w = computeWeightedFreq(freqSession, freqSession.length - 1, FREQ_W_HALF_WIN);
+
   // 表示用（freq < 0 は除外、かつ振幅フィルタ）
   if (freq_hz > 0 && (amplitude === null || amplitude >= ampThreshold)) {
     freqValues.push(freq_hz);
+    freqWValues.push(freq_w);
     freqTimeValues.push(elapsed_s);
-    if (freqValues.length > MAX_POINTS) { freqValues.shift(); freqTimeValues.shift(); }
-    drawChart(ctxFreq, freqValues, '#cc6600', freqTimeValues,
-              document.getElementById('freqAxisLabel'), 'Hz');
+    if (freqValues.length > MAX_POINTS) { freqValues.shift(); freqWValues.shift(); freqTimeValues.shift(); }
+    drawFreqChart(ctxFreq, freqValues, freqWValues, freqTimeValues,
+                  document.getElementById('freqAxisLabel'));
   }
 
   // 散布図をリアルタイム更新（5サンプルに1回）
@@ -654,6 +660,92 @@ function drawVelChart(ctx, rawData, smoothData, times, labelEl) {
 }
 
 // ═══════════════════════════════════════════════
+//  周波数チャート（raw = 薄線、振幅加重平均 = 主線）
+// ═══════════════════════════════════════════════
+function drawFreqChart(ctx, rawData, wData, times, labelEl) {
+  const W = ctx.canvas.width, H = ctx.canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#f8fbff';
+  ctx.fillRect(0, 0, W, H);
+  if (rawData.length < 2) return;
+
+  const PAD_L = 62, PAD_R = 12, PAD_T = 12, PAD_B = 34;
+  const plotW = W - PAD_L - PAD_R, plotH = H - PAD_T - PAD_B;
+  const validRaw = rawData.filter(v => v > 0);
+  const validW   = wData.filter(v => v > 0);
+  const all = validRaw.concat(validW);
+  if (all.length === 0) return;
+  let min = Math.min(...all), max = Math.max(...all);
+  if (Math.abs(max - min) < 0.5) { min -= 1; max += 1; }
+  const range = max - min;
+  const toY = v => PAD_T + plotH - ((v - min) / range) * plotH;
+  const useTimes = times && times.length === rawData.length && times[times.length - 1] > times[0];
+  const tMin = useTimes ? times[0] : 0, tMax = useTimes ? times[times.length - 1] : rawData.length - 1;
+  const toX = i => PAD_L + ((useTimes ? times[i] : i) - tMin) / (tMax - tMin) * plotW;
+
+  // グリッド
+  ctx.strokeStyle = 'rgba(160,185,210,0.5)'; ctx.lineWidth = 1;
+  for (let k = 0; k <= 4; k++) {
+    const y = PAD_T + (k / 4) * plotH;
+    ctx.beginPath(); ctx.moveTo(PAD_L, y); ctx.lineTo(PAD_L + plotW, y); ctx.stroke();
+    ctx.fillStyle = '#6b8099'; ctx.font = '10px "Share Tech Mono",monospace'; ctx.textAlign = 'right';
+    ctx.fillText((max - (k / 4) * range).toFixed(2), PAD_L - 6, y + 4);
+  }
+  // raw（薄い細線、freq<0は不連続）
+  ctx.strokeStyle = 'rgba(204,102,0,0.25)'; ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  let started = false;
+  for (let i = 0; i < rawData.length; i++) {
+    if (rawData[i] <= 0) { started = false; continue; }
+    started ? ctx.lineTo(toX(i), toY(rawData[i])) : ctx.moveTo(toX(i), toY(rawData[i]));
+    started = true;
+  }
+  ctx.stroke();
+  // 加重平均（主線、freq_w<0は不連続）
+  if (wData.length >= 2) {
+    ctx.strokeStyle = '#cc6600'; ctx.lineWidth = 2;
+    ctx.beginPath();
+    started = false;
+    for (let i = 0; i < wData.length; i++) {
+      if (wData[i] <= 0) { started = false; continue; }
+      started ? ctx.lineTo(toX(i), toY(wData[i])) : ctx.moveTo(toX(i), toY(wData[i]));
+      started = true;
+    }
+    ctx.stroke();
+    const lastValid = [...wData].reverse().find(v => v > 0);
+    const lastIdx   = wData.length - 1 - [...wData].reverse().findIndex(v => v > 0);
+    if (lastValid > 0) {
+      ctx.fillStyle = '#cc6600';
+      ctx.beginPath(); ctx.arc(toX(lastIdx), toY(lastValid), 4, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+  if (useTimes) drawTimeAxis(ctx, times, PAD_L, PAD_T, plotW, plotH);
+  if (labelEl) {
+    const wLast = [...wData].reverse().find(v => v > 0) ?? 0;
+    labelEl.textContent = `last(w-avg) ${wLast.toFixed(2)} Hz  |  min ${min.toFixed(2)} / max ${max.toFixed(2)} Hz`;
+  }
+}
+
+// ═══════════════════════════════════════════════
+//  振幅加重平均周波数
+//  centerIdx の ±halfWin フレームを amplitude² で加重平均
+//  freq_hz < 0 のフレームは除外（重み0）
+// ═══════════════════════════════════════════════
+function computeWeightedFreq(session, centerIdx, halfWin) {
+  const lo = Math.max(0, centerIdx - halfWin);
+  const hi = Math.min(session.length - 1, centerIdx + halfWin);
+  let wSum = 0, fwSum = 0;
+  for (let j = lo; j <= hi; j++) {
+    const f = session[j];
+    if (f.freq_hz < 0 || f.amplitude == null) continue;
+    const w = f.amplitude * f.amplitude;
+    wSum  += w;
+    fwSum += w * f.freq_hz;
+  }
+  return wSum > 0 ? fwSum / wSum : -1;
+}
+
+// ═══════════════════════════════════════════════
 //  f₀ 推定（静止時周波数の中央値）
 // ═══════════════════════════════════════════════
 function computeFRef() {
@@ -782,8 +874,10 @@ function updateStats() {
   }
   const validFreqs = freqSession.filter(f => f.freq_hz > 0 && (f.amplitude || 0) >= ampThreshold);
   if (validFreqs.length > 0) {
+    const fw = computeWeightedFreq(freqSession, freqSession.length - 1, FREQ_W_HALF_WIN);
     const lastF = validFreqs[validFreqs.length - 1];
-    document.getElementById('sFreqLast').textContent = lastF.freq_hz.toFixed(2) + ' Hz';
+    document.getElementById('sFreqLast').textContent =
+      (fw > 0 ? fw.toFixed(2) : lastF.freq_hz.toFixed(2)) + ' Hz';
   }
   const fRef = computeFRef();
   const lastAmp = freqSession.length > 0 ? (freqSession[freqSession.length-1].amplitude || 0) : 0;
@@ -963,7 +1057,7 @@ function resetAll() {
   firstFreqEspTime = -1;
   firstFreqRecvMs  = -1;
   posSession = []; freqSession = [];
-  posValues = []; velValues = []; velSmoothValues = []; freqValues = [];
+  posValues = []; velValues = []; velSmoothValues = []; freqValues = []; freqWValues = [];
   posTimeValues = []; freqTimeValues = [];
   ['sPosLast','sVelLast','sFreqLast','sFRefAmp'].forEach(id => {
     document.getElementById(id).textContent = '—';
@@ -1009,7 +1103,7 @@ function interpolatePos(t_ms) {
 // ═══════════════════════════════════════════════
 function buildCsv() {
   if (freqSession.length > 0) {
-    let out = 'elapsed_s,pos_m,vel_ms,freq_hz,amplitude,gap_ok\n';
+    let out = 'elapsed_s,pos_m,vel_ms,freq_hz,amplitude,gap_ok,freq_w_hz\n';
     const n = freqSession.length;
     // pos を先に全行補間（pos_m 列用）
     const posMerged = freqSession.map(f => {
@@ -1034,10 +1128,14 @@ function buildCsv() {
         if (dt > 0) vel_ms = (pHi.pos_m - pLo.pos_m) / dt;
       }
 
-      const pos_str = pos_m !== null ? pos_m.toFixed(6) : '';
-      const amp_str = (f.amplitude !== null && f.amplitude !== undefined)
-                      ? f.amplitude.toFixed(4) : '';
-      out += `${f.elapsed_s.toFixed(4)},${pos_str},${vel_ms.toFixed(6)},${f.freq_hz.toFixed(2)},${amp_str},${f.gap_ok}\n`;
+      // 振幅加重平均周波数（中央差分 ±HALF_WIN）
+      const freq_w = computeWeightedFreq(freqSession, i, HALF_WIN);
+
+      const pos_str  = pos_m !== null ? pos_m.toFixed(6) : '';
+      const amp_str  = (f.amplitude !== null && f.amplitude !== undefined)
+                       ? f.amplitude.toFixed(4) : '';
+      const freq_w_str = freq_w > 0 ? freq_w.toFixed(4) : '';
+      out += `${f.elapsed_s.toFixed(4)},${pos_str},${vel_ms.toFixed(6)},${f.freq_hz.toFixed(2)},${amp_str},${f.gap_ok},${freq_w_str}\n`;
     }
     return out;
   }
