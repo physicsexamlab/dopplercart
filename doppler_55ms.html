@@ -431,6 +431,19 @@ function onFreqNotify(event) {
 
   freqSession.push({ t_true_ms, elapsed_s, freq_hz, gap_ok, amplitude });
 
+  // 位置を ESP32 タイムスタンプに同期してサンプル（BLE ジッター排除）
+  if (notifyReceived) {
+    posSession.push({ t_ms: t_true_ms, elapsed_s, pos_m: latestPosition, vel_ms: latestVelocity });
+    posValues.push(latestPosition);
+    velValues.push(latestVelocity);
+    posTimeValues.push(elapsed_s);
+    const sliceV = velValues.slice(Math.max(0, velValues.length - VEL_SMOOTH_WIN));
+    velSmoothValues.push(sliceV.reduce((a, b) => a + b, 0) / sliceV.length);
+    if (posValues.length > MAX_POINTS) { posValues.shift(); velValues.shift(); velSmoothValues.shift(); posTimeValues.shift(); }
+    drawChart(ctxPos, posValues, '#0077cc', posTimeValues, document.getElementById('posAxisLabel'), 'm');
+    drawVelChart(ctxVel, velValues, velSmoothValues, posTimeValues, document.getElementById('velAxisLabel'));
+  }
+
   // 振幅加重平均（トレーリング窓）
   const freq_w = computeWeightedFreq(freqSession, freqSession.length - 1, FREQ_W_HALF_WIN);
 
@@ -451,34 +464,13 @@ function onFreqNotify(event) {
 }
 
 // ═══════════════════════════════════════════════
-//  55ms サンプラ（Smart Cart polling）
+//  55ms サンプラ（Smart Cart keepalive のみ）
 // ═══════════════════════════════════════════════
 function sampleTick() {
   if (!isRecording) return;
-
   if (posCmdChar) {
     posCmdChar.writeValueWithoutResponse(new Uint8Array([0x05, 0x02])).catch(() => {});
   }
-  if (!notifyReceived) return;
-
-  const now       = performance.now();
-  const elapsed_s = (now - recordStartTime) / 1000;
-  const pos       = latestPosition;
-  const vel       = latestVelocity;   // notify 到着時刻ベースで計算済み
-
-  posSession.push({ t_ms: now, elapsed_s, pos_m: pos, vel_ms: vel });
-
-  posValues.push(pos);
-  velValues.push(vel);
-  posTimeValues.push(elapsed_s);
-  // 5点トレーリング平均
-  const sliceV = velValues.slice(Math.max(0, velValues.length - VEL_SMOOTH_WIN));
-  velSmoothValues.push(sliceV.reduce((a, b) => a + b, 0) / sliceV.length);
-  if (posValues.length > MAX_POINTS) { posValues.shift(); velValues.shift(); velSmoothValues.shift(); posTimeValues.shift(); }
-
-  updateStats();
-  drawChart(ctxPos, posValues, '#0077cc', posTimeValues, document.getElementById('posAxisLabel'), 'm');
-  drawVelChart(ctxVel, velValues, velSmoothValues, posTimeValues, document.getElementById('velAxisLabel'));
 }
 
 // ═══════════════════════════════════════════════
