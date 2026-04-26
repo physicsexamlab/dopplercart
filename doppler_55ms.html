@@ -392,6 +392,12 @@ function handlePositionNotify(event) {
     }
     latestPosition = newPos;
     notifyReceived = true;
+
+    // 位置をイベント駆動で記録（Smart Cart 通知到着時刻を正確なタイムスタンプとして使用）
+    if (isRecording) {
+      const elapsed_s = (now - recordStartTime) / 1000;
+      posSession.push({ t_ms: now, elapsed_s, pos_m: newPos, vel_ms: latestVelocity });
+    }
   }
 }
 
@@ -431,9 +437,8 @@ function onFreqNotify(event) {
 
   freqSession.push({ t_true_ms, elapsed_s, freq_hz, gap_ok, amplitude });
 
-  // 位置を ESP32 タイムスタンプに同期してサンプル（BLE ジッター排除）
+  // 位置チャートを ESP32 タイムスタンプに同期して更新（表示用のみ・記録は handlePositionNotify で行う）
   if (notifyReceived) {
-    posSession.push({ t_ms: t_true_ms, elapsed_s, pos_m: latestPosition, vel_ms: latestVelocity });
     posValues.push(latestPosition);
     velValues.push(latestVelocity);
     posTimeValues.push(elapsed_s);
