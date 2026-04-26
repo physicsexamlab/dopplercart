@@ -838,7 +838,9 @@ function drawScatter() {
     if (dt <= 0) continue;
     const v = (pHi.pos_m - pLo.pos_m) / dt;
     if (Math.abs(v) > 5) continue;  // エンコーダー異常除外
-    const df = f.freq_hz - fRef;
+    const fw = computeWeightedFreq(freqSession, i, FREQ_W_HALF_WIN);
+    if (fw <= 0) continue;          // 有効な加重平均がない窓は除外
+    const df = fw - fRef;           // 散布図は freq_w_hz ベース
     const amp = f.amplitude || 0;
     const x = toX(v), y = toY(df);
     if (x < PAD_L || x > PAD_L+plotW || y < PAD_T || y > PAD_T+plotH) continue;
@@ -1189,7 +1191,7 @@ function resizeCanvases() {
   }
   drawChart(ctxPos,  posValues,  '#0077cc', posTimeValues,  document.getElementById('posAxisLabel'),  'm');
   drawVelChart(ctxVel, velValues, velSmoothValues, posTimeValues, document.getElementById('velAxisLabel'));
-  drawChart(ctxFreq, freqValues, '#cc6600', freqTimeValues, document.getElementById('freqAxisLabel'), 'Hz');
+  drawFreqChart(ctxFreq, freqValues, freqWValues, freqTimeValues, document.getElementById('freqAxisLabel'));
   drawScatter();
 }
 window.addEventListener('resize', resizeCanvases);
@@ -1200,12 +1202,14 @@ document.getElementById('ampSlider').addEventListener('input', function() {
   ampThreshold = parseInt(this.value, 10);
   document.getElementById('ampSliderVal').textContent = ampThreshold;
   // フィルタ変更 → 表示用バッファを再構築
-  const filtered = freqSession
-    .filter(f => f.freq_hz > 0 && (f.amplitude || 0) >= ampThreshold)
-    .slice(-MAX_POINTS);
-  freqValues     = filtered.map(f => f.freq_hz);
-  freqTimeValues = filtered.map(f => f.elapsed_s);
-  drawChart(ctxFreq, freqValues, '#cc6600', freqTimeValues, document.getElementById('freqAxisLabel'), 'Hz');
+  const filteredIdx = freqSession.reduce((acc, f, i) => {
+    if (f.freq_hz > 0 && (f.amplitude || 0) >= ampThreshold) acc.push(i);
+    return acc;
+  }, []).slice(-MAX_POINTS);
+  freqValues     = filteredIdx.map(i => freqSession[i].freq_hz);
+  freqWValues    = filteredIdx.map(i => computeWeightedFreq(freqSession, i, FREQ_W_HALF_WIN));
+  freqTimeValues = filteredIdx.map(i => freqSession[i].elapsed_s);
+  drawFreqChart(ctxFreq, freqValues, freqWValues, freqTimeValues, document.getElementById('freqAxisLabel'));
   drawScatter();
   updateStats();
 });
