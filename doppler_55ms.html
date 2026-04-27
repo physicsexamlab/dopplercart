@@ -188,11 +188,6 @@
     </div>
   </div>
 
-  <details id="diagDetails" style="background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:8px 14px;">
-    <summary style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.1em;color:var(--dim);cursor:pointer;">Diagnostic Log</summary>
-    <pre id="diagLog" style="font-family:'Share Tech Mono',monospace;font-size:0.72rem;color:var(--text);margin-top:8px;max-height:180px;overflow-y:auto;white-space:pre-wrap;"></pre>
-  </details>
-
   <div style="display:flex; flex-direction:column; gap:16px;">
     <div class="chart-panel pos">
       <div class="chart-header">
@@ -275,9 +270,11 @@ const SAMPLE_INTERVAL_MS = 55;
 const MAX_POINTS         = 300;
 
 // ESP32 BLE 遅延補正:
+//   ファームは窓中点 (t0+t1)/2 をタイムスタンプとして送信。
 //   t_true_ms = firstFreqRecvMs + elapsed_s*1000 - SAMPLING_TAIL_MS
-//   初回受信時刻を基点に ESP32 内部時計で補外することで BLE ジッターを排除し、
-//   SAMPLING_TAIL_MS (≈37ms) で平均 BLE 伝搬遅延を差し引く。
+//   初回受信時刻を基点に ESP32 内部時計で補外し、
+//   SAMPLING_TAIL_MS で「窓中点 → BLE 受信」遅延を差し引く。
+//   内訳: 窓半分(≈27.5ms) + Goertzel(≈2ms) + BLE 転送(≈10ms) ≈ 約 37ms（実測補正値）
 const SAMPLING_TAIL_MS      = 37;
 
 // 55ms インターバルで 180ms 超のギャップ = 3 パケット以上欠落
@@ -301,7 +298,8 @@ let latestVelocity    = 0;
 let notifyReceived    = false;
 let lastNotifyTime    = 0;   // notify 到着時刻 [ms]
 let lastNotifyPos     = 0;   // notify 到着時の位置 [m]
-let notifyPacketCount = 0;
+// devRecv (0000-0003) と char0003 (0003-0003) が同一パケットを二重発火するのを抑止する閾値
+const DUPLICATE_GUARD_MS = 20;
 
 // ═══════════════════════════════════════════════
 //  Freq Sensor (ESP32) 状態
@@ -337,7 +335,8 @@ let posTimeValues   = [];  // 位置サンプルの elapsed_s（時間軸用）
 let freqTimeValues  = [];  // 周波数サンプルの elapsed_s（時間軸用）
 
 // 表示フィルタ・スムージング
-let ampThreshold = 100;   // 振幅フィルタ閾値（スライダーで変更）
+let ampThreshold = 100;      // 振幅フィルタ閾値（スライダーで変更）
+let ampThresholdIsAuto = true; // true: 停止時に静止振幅から自動算出、false: ユーザ手動
 const VEL_SMOOTH_WIN  = 5; // 速度平均窓幅
 const FREQ_W_HALF_WIN = CSV_VEL_HALF_WIN; // 周波数振幅加重平均の半窓幅（=3フレーム≈165ms）
 const GOERTZEL_FREQ_LOW  = 960.0;  // Arduino FREQ_LOW  と一致させること
@@ -348,25 +347,26 @@ const GOERTZEL_FREQ_HIGH = 1040.0; // Arduino FREQ_HIGH と一致させること
 // ═══════════════════════════════════════════════
 function handlePositionNotify(event) {
   const data = event.target.value;
-  notifyPacketCount++;
-
-  if (notifyPacketCount <= 10) {
-    const bytes = Array.from(new Uint8Array(data.buffer))
-      .map(b => b.toString(16).padStart(2,'0')).join(' ');
-    log(`pkt#${notifyPacketCount} [${data.byteLength}B]: ${bytes}`);
-  }
-  if (notifyPacketCount === 11) log('(以降のパケットログは省略)');
 
   let rawChange = null;
+  let isOneShot = false;
 
   if (data.byteLength >= 5 &&
       data.getUint8(0) === 0xC0 &&
       data.getUint8(1) === 0x00 &&
       data.getUint8(2) === 0x05) {
+    // One-shot レスポンス（poll への応答）。seqNum を持たないため
+    // 後段の time-based dedup で二重発火を抑止する。
     rawChange = data.getInt16(3, true);
+    isOneShot = true;
   } else if (data.byteLength >= 3 && data.getUint8(0) <= 0x1F) {
+    // 周期データ（seqNum 0..0x1F）。重複は seqNum で確実に弾ける。
     const seq = data.getUint8(0);
-    if (seq === lastPacketSeq) return;
+    if (seq === lastPacketSeq) return;             // 完全重複
+    if (lastPacketSeq >= 0 && seq !== ((lastPacketSeq + 1) & 0x1F)) {
+      const lost = ((seq - lastPacketSeq - 1) + 32) & 0x1F;
+      console.warn(`[pos] seq gap: ${lastPacketSeq} -> ${seq} (${lost} pkt lost)`);
+    }
     lastPacketSeq = seq;
     rawChange = data.getInt16(1, true);
     if (posAckChar) {
@@ -374,32 +374,39 @@ function handlePositionNotify(event) {
     }
   }
 
-  if (rawChange !== null) {
-    const now   = performance.now();
-    countAccumulated += rawChange;
-    const newPos = countAccumulated * POS_SCALE;
+  if (rawChange === null) return;
 
-    // notify 到着時刻ベースで速度を計算
-    // dt < 20ms の場合は devRecv/char0003 の二重発火とみなし速度を更新しない
-    if (lastNotifyTime > 0) {
-      const dt = (now - lastNotifyTime) / 1000;
-      if (dt >= 0.020) {
-        latestVelocity = (newPos - lastNotifyPos) / dt;
-        lastNotifyTime = now;
-        lastNotifyPos  = newPos;
-      }
-    } else {
+  const now = performance.now();
+
+  // One-shot 0xC0 は seqNum を持たず、devRecv と char0003 から
+  // 同一パケットが二重に届いた場合に位置が二重加算される。
+  // 直前 notify から DUPLICATE_GUARD_MS 以内の one-shot は捨てる。
+  if (isOneShot && lastNotifyTime > 0 && (now - lastNotifyTime) < DUPLICATE_GUARD_MS) {
+    return;
+  }
+
+  countAccumulated += rawChange;
+  const newPos = countAccumulated * POS_SCALE;
+
+  // 速度: notify 到着時刻ベースの中央差分（≥20ms ガード）
+  if (lastNotifyTime > 0) {
+    const dt = (now - lastNotifyTime) / 1000;
+    if (dt >= 0.020) {
+      latestVelocity = (newPos - lastNotifyPos) / dt;
       lastNotifyTime = now;
       lastNotifyPos  = newPos;
     }
-    latestPosition = newPos;
-    notifyReceived = true;
+  } else {
+    lastNotifyTime = now;
+    lastNotifyPos  = newPos;
+  }
+  latestPosition = newPos;
+  notifyReceived = true;
 
-    // 位置をイベント駆動で記録（Smart Cart 通知到着時刻を正確なタイムスタンプとして使用）
-    if (isRecording) {
-      const elapsed_s = (now - recordStartTime) / 1000;
-      posSession.push({ t_ms: now, elapsed_s, pos_m: newPos, vel_ms: latestVelocity });
-    }
+  // イベント駆動で記録（BLE 到着時刻を正確なタイムスタンプとして使用）
+  if (isRecording) {
+    const elapsed_s = (now - recordStartTime) / 1000;
+    posSession.push({ t_ms: now, elapsed_s, pos_m: newPos, vel_ms: latestVelocity });
   }
 }
 
@@ -746,20 +753,74 @@ function computeWeightedFreq(session, centerIdx, halfWin) {
 }
 
 // ═══════════════════════════════════════════════
+//  表示用周波数バッファ再構築（ampThreshold 変更時に呼ぶ）
+// ═══════════════════════════════════════════════
+function rebuildFreqBuffers() {
+  const filteredIdx = freqSession.reduce((acc, f, i) => {
+    if (f.freq_hz > 0 && (f.amplitude ?? 0) >= ampThreshold) acc.push(i);
+    return acc;
+  }, []).slice(-MAX_POINTS);
+  freqValues     = filteredIdx.map(i => freqSession[i].freq_hz);
+  freqWValues    = filteredIdx.map(i => computeWeightedFreq(freqSession, i, FREQ_W_HALF_WIN));
+  freqTimeValues = filteredIdx.map(i => freqSession[i].elapsed_s);
+}
+
+// ═══════════════════════════════════════════════
+//  振幅閾値の自動算出（停止後、autoモード時のみ）
+//  静止区間の amplitude 中央値 × 0.3 を閾値として適用する
+// ═══════════════════════════════════════════════
+function computeDynamicAmpThreshold() {
+  if (!ampThresholdIsAuto) return;
+  if (posSession.length === 0) return;
+
+  const stationaryAmps = freqSession
+    .filter(f => f.freq_hz > 0 && f.amplitude != null)
+    .map(f => {
+      const p = interpolatePos(f.t_true_ms);
+      return (p && Math.abs(p.vel_ms) < 0.08) ? f.amplitude : null;
+    })
+    .filter(v => v !== null)
+    .sort((a, b) => a - b);
+
+  if (stationaryAmps.length < 3) return;
+
+  const medianAmp = stationaryAmps[Math.floor(stationaryAmps.length / 2)];
+  const newThresh = Math.max(50, Math.min(500, Math.round(medianAmp * 0.3)));
+  if (newThresh === ampThreshold) return;
+
+  ampThreshold = newThresh;
+  const slider = document.getElementById('ampSlider');
+  slider.value = ampThreshold;
+  document.getElementById('ampSliderVal').textContent = ampThreshold;
+  rebuildFreqBuffers();
+  drawFreqChart(ctxFreq, freqValues, freqWValues, freqTimeValues,
+                document.getElementById('freqAxisLabel'));
+}
+
+// ═══════════════════════════════════════════════
 //  f₀ 推定（静止時周波数の中央値）
 // ═══════════════════════════════════════════════
 function computeFRef() {
   const stationaryFreqs = freqSession
     .filter(f => f.freq_hz > 0 && (f.amplitude ?? 0) >= ampThreshold)
-    .map((f, i) => {
-      // 対応する位置の速度を確認
+    .map(f => {
       const p = interpolatePos(f.t_true_ms);
       return p && Math.abs(p.vel_ms) < 0.08 ? f.freq_hz : null;
     })
     .filter(v => v !== null);
-  if (stationaryFreqs.length < 3) return 997.0;
-  stationaryFreqs.sort((a, b) => a - b);
-  return stationaryFreqs[Math.floor(stationaryFreqs.length / 2)];
+  if (stationaryFreqs.length >= 3) {
+    stationaryFreqs.sort((a, b) => a - b);
+    return stationaryFreqs[Math.floor(stationaryFreqs.length / 2)];
+  }
+  // フォールバック: 有効 freq 全体の中央値（静止区間が確保できない場合）
+  const allFreqs = freqSession
+    .filter(f => f.freq_hz > 0 && (f.amplitude ?? 0) >= ampThreshold)
+    .map(f => f.freq_hz);
+  if (allFreqs.length >= 3) {
+    allFreqs.sort((a, b) => a - b);
+    return allFreqs[Math.floor(allFreqs.length / 2)];
+  }
+  return 997.0;
 }
 
 // ═══════════════════════════════════════════════
@@ -841,17 +902,19 @@ function drawScatter() {
     const fw = computeWeightedFreq(freqSession, i, FREQ_W_HALF_WIN);
     if (fw <= 0) continue;          // 有効な加重平均がない窓は除外
     const df = fw - fRef;           // 散布図は freq_w_hz ベース
-    const amp = f.amplitude || 0;
+    const amp = f.amplitude ?? 0;
     const x = toX(v), y = toY(df);
     if (x < PAD_L || x > PAD_L+plotW || y < PAD_T || y > PAD_T+plotH) continue;
     const aboveThresh = amp >= ampThreshold;
     ctxScatter.beginPath();
     ctxScatter.arc(x, y, aboveThresh ? 5 : 3, 0, Math.PI*2);
-    ctxScatter.fillStyle = !f.gap_ok
-      ? 'rgba(200,0,0,0.6)'
-      : aboveThresh
-        ? 'rgba(204,102,0,0.75)'
-        : 'rgba(160,160,160,0.35)';
+    if (!aboveThresh) {
+      ctxScatter.fillStyle = 'rgba(160,160,160,0.25)';  // 閾値未満は薄いグレー（gap_ok 問わず）
+    } else if (!f.gap_ok) {
+      ctxScatter.fillStyle = 'rgba(200,0,0,0.6)';       // 閾値以上かつ gap_ok=false は赤
+    } else {
+      ctxScatter.fillStyle = 'rgba(204,102,0,0.75)';
+    }
     ctxScatter.fill();
     if (aboveThresh) nShown++;
   }
@@ -874,7 +937,7 @@ function updateStats() {
     const vSmooth = velSmoothValues.length > 0 ? velSmoothValues[velSmoothValues.length-1] : last.vel_ms;
     document.getElementById('sVelLast').textContent = vSmooth.toFixed(3) + ' m/s';
   }
-  const validFreqs = freqSession.filter(f => f.freq_hz > 0 && (f.amplitude || 0) >= ampThreshold);
+  const validFreqs = freqSession.filter(f => f.freq_hz > 0 && (f.amplitude ?? 0) >= ampThreshold);
   if (validFreqs.length > 0) {
     const fw = computeWeightedFreq(freqSession, freqSession.length - 1, FREQ_W_HALF_WIN);
     const lastF = validFreqs[validFreqs.length - 1];
@@ -882,7 +945,7 @@ function updateStats() {
       (fw > 0 ? fw.toFixed(2) : lastF.freq_hz.toFixed(2)) + ' Hz';
   }
   const fRef = computeFRef();
-  const lastAmp = freqSession.length > 0 ? (freqSession[freqSession.length-1].amplitude || 0) : 0;
+  const lastAmp = freqSession.length > 0 ? (freqSession[freqSession.length-1].amplitude ?? 0) : 0;
   document.getElementById('sFRefAmp').textContent =
     `${fRef.toFixed(2)} Hz  /  ${lastAmp.toFixed(0)}`;
 }
@@ -1037,6 +1100,7 @@ function startRecording() {
   prevFreqEspTime  = -1;
   firstFreqEspTime = -1;
   firstFreqRecvMs  = -1;
+  ampThresholdIsAuto = true;  // 録画開始でオートモードに戻す
   samplerTimerId   = setInterval(sampleTick, SAMPLE_INTERVAL_MS);
   updateButtonStates();
 }
@@ -1047,6 +1111,7 @@ function stopRecording() {
   const hasData = posSession.length > 0 || freqSession.length > 0;
   document.getElementById('btnCsv').disabled = !hasData;
   updateButtonStates();
+  computeDynamicAmpThreshold();  // 静止振幅から閾値を自動算出（autoモード時のみ）
   drawScatter();  // 停止後に全データで散布図を確定描画
 }
 
@@ -1054,7 +1119,10 @@ function resetAll() {
   stopRecording();
   countAccumulated = 0; lastPacketSeq = -1;
   latestPosition = 0; notifyReceived = false;
-  latestVelocity = 0; lastNotifyTime = 0; lastNotifyPos = 0; notifyPacketCount = 0;
+  latestVelocity = 0; lastNotifyTime = 0; lastNotifyPos = 0;
+  ampThreshold = 100; ampThresholdIsAuto = true;
+  document.getElementById('ampSlider').value = 100;
+  document.getElementById('ampSliderVal').textContent = '100';
   prevFreqEspTime  = -1;
   firstFreqEspTime = -1;
   firstFreqRecvMs  = -1;
@@ -1200,15 +1268,9 @@ resizeCanvases();
 // ─── 振幅スライダー ────────────────────────────
 document.getElementById('ampSlider').addEventListener('input', function() {
   ampThreshold = parseInt(this.value, 10);
+  ampThresholdIsAuto = false;  // 手動操作 → 自動算出を無効化
   document.getElementById('ampSliderVal').textContent = ampThreshold;
-  // フィルタ変更 → 表示用バッファを再構築
-  const filteredIdx = freqSession.reduce((acc, f, i) => {
-    if (f.freq_hz > 0 && (f.amplitude || 0) >= ampThreshold) acc.push(i);
-    return acc;
-  }, []).slice(-MAX_POINTS);
-  freqValues     = filteredIdx.map(i => freqSession[i].freq_hz);
-  freqWValues    = filteredIdx.map(i => computeWeightedFreq(freqSession, i, FREQ_W_HALF_WIN));
-  freqTimeValues = filteredIdx.map(i => freqSession[i].elapsed_s);
+  rebuildFreqBuffers();
   drawFreqChart(ctxFreq, freqValues, freqWValues, freqTimeValues, document.getElementById('freqAxisLabel'));
   drawScatter();
   updateStats();
