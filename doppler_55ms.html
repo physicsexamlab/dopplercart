@@ -965,7 +965,8 @@ function log(msg) {
 async function connectSmartCart() {
   try {
     setCartStatus('SCANNING...');
-    document.getElementById('diagLog').textContent = '';
+    const diagEl = document.getElementById('diagLog');
+    if (diagEl) diagEl.textContent = '';
     log('Requesting Smart Cart ...');
     cartDevice = await navigator.bluetooth.requestDevice({
       filters: [{ namePrefix: 'Smart Cart' }],
