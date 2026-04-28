@@ -962,10 +962,9 @@ function drawScatter() {
   for (let i = 0; i < n; i++) {
     const f = freqSession[i];
     if (f.freq_hz <= 0) continue;
-    const k = nearestPosIdx(f.t_true_ms + samplingTailAdjMs);
-    if (k < 0) continue;
-    const v = posCentralDiffVel(k, HALF_WIN);
-    if (v === null) continue;
+    const ip = interpolatePos(f.t_true_ms + samplingTailAdjMs, HALF_WIN);
+    if (!ip || ip.vel_ms === null) continue;
+    const v = ip.vel_ms;
     if (Math.abs(v) > 5) continue;  // エンコーダー異常除外
     const fw = computeWeightedFreq(freqSession, i, FREQ_W_HALF_WIN);
     if (fw <= 0) continue;          // 有効な加重平均がない窓は除外
@@ -1184,10 +1183,10 @@ function calibrateSamplingTail() {
       const f = freqSession[i];
       if (f.freq_hz <= 0 || (f.amplitude ?? 0) < 300) continue;
       // τ だけシフトした時刻で pos を探す
-      const k = nearestPosIdx(f.t_true_ms + tau);
-      if (k < 0) continue;
-      const v = posCentralDiffVel(k, HALF);
-      if (v === null || Math.abs(v) < 0.02 || Math.abs(v) > 2.5) continue;
+      const ip = interpolatePos(f.t_true_ms + tau, HALF);
+      if (!ip || ip.vel_ms === null) continue;
+      const v = ip.vel_ms;
+      if (Math.abs(v) < 0.02 || Math.abs(v) > 2.5) continue;
       const fw = computeWeightedFreq(freqSession, i, FREQ_W_HALF_WIN);
       if (fw <= 0) continue;
       const df = fw - f0;
@@ -1294,44 +1293,41 @@ function resetAll() {
   document.getElementById('calApplied').style.display  = 'none';
 }
 
-// ═══════════════════════════════════════════════
-//  位置の線形補間（CSV マージ用）
-//  posSession の t_ms を二分探索し、t_ms を挟む 2 点で補間する
-// ═══════════════════════════════════════════════
-function interpolatePos(t_ms) {
-  if (posSession.length === 0) return null;
-  if (t_ms <= posSession[0].t_ms)
-    return { pos_m: posSession[0].pos_m, vel_ms: posSession[0].vel_ms };
-  const last = posSession[posSession.length - 1];
-  if (t_ms >= last.t_ms)
-    return { pos_m: last.pos_m, vel_ms: last.vel_ms };
-
-  let lo = 0, hi = posSession.length - 1;
-  while (hi - lo > 1) {
-    const mid = (lo + hi) >> 1;
-    if (posSession[mid].t_ms <= t_ms) lo = mid; else hi = mid;
-  }
-  const p0    = posSession[lo], p1 = posSession[hi];
-  const alpha = (t_ms - p0.t_ms) / (p1.t_ms - p0.t_ms);
-  return {
-    pos_m:  p0.pos_m  + alpha * (p1.pos_m  - p0.pos_m),
-    vel_ms: p0.vel_ms + alpha * (p1.vel_ms - p0.vel_ms)
-  };
-}
-
-// posSession で t_ms に最も近いサンプルの index を返す（補間なし）。
-// freq フレームと pos サンプルを 1:1 で対応付けるのに使う。
-function nearestPosIdx(t_ms) {
+// posSession の t_ms を二分探索し、前後 2 点で線形補間する。
+// pos_m : 位置を線形補間。
+// vel_ms: posCentralDiffVel を前後インデックスで線形補間（halfWin=0 なら隣接差分速度を補間）。
+// t_ms_nearest: CSV 診断用・最近傍サンプルのタイムスタンプ。
+function interpolatePos(t_ms, halfWin) {
   const n = posSession.length;
-  if (n === 0) return -1;
-  if (t_ms <= posSession[0].t_ms) return 0;
-  if (t_ms >= posSession[n - 1].t_ms) return n - 1;
+  if (n === 0) return null;
+  if (t_ms <= posSession[0].t_ms) {
+    const v = halfWin > 0 ? posCentralDiffVel(0, halfWin) : posSession[0].vel_ms;
+    return { pos_m: posSession[0].pos_m, vel_ms: v, t_ms_nearest: posSession[0].t_ms };
+  }
+  const last = posSession[n - 1];
+  if (t_ms >= last.t_ms) {
+    const v = halfWin > 0 ? posCentralDiffVel(n - 1, halfWin) : last.vel_ms;
+    return { pos_m: last.pos_m, vel_ms: v, t_ms_nearest: last.t_ms };
+  }
   let lo = 0, hi = n - 1;
   while (hi - lo > 1) {
     const mid = (lo + hi) >> 1;
     if (posSession[mid].t_ms <= t_ms) lo = mid; else hi = mid;
   }
-  return (t_ms - posSession[lo].t_ms) <= (posSession[hi].t_ms - t_ms) ? lo : hi;
+  const p0 = posSession[lo], p1 = posSession[hi];
+  const dt  = p1.t_ms - p0.t_ms;
+  const alpha = dt > 0 ? (t_ms - p0.t_ms) / dt : 0;
+  const pos_m = p0.pos_m + alpha * (p1.pos_m - p0.pos_m);
+  let vel_ms;
+  if (halfWin > 0) {
+    const v0 = posCentralDiffVel(lo, halfWin);
+    const v1 = posCentralDiffVel(hi, halfWin);
+    vel_ms = (v0 !== null && v1 !== null) ? v0 + alpha * (v1 - v0)
+           : (v0 !== null ? v0 : v1);
+  } else {
+    vel_ms = p0.vel_ms + alpha * (p1.vel_ms - p0.vel_ms);
+  }
+  return { pos_m, vel_ms, t_ms_nearest: alpha <= 0.5 ? p0.t_ms : p1.t_ms };
 }
 
 // pos 側 t_ms 差分による central-diff 速度。pos サンプル posIdx の周辺
@@ -1354,8 +1350,8 @@ function posCentralDiffVel(posIdx, halfWin) {
 //    - elapsed_s  : freq の ESP32 内部時計基準（gap 検出用、freq 系列内で完結）
 //    - freq_t_s   : freq 窓中点のブラウザ時刻（recordStartTime 基準・SAMPLING_TAIL 補正済）
 //    - pos_t_s    : 各 freq フレームに最近接の pos サンプル到着時刻（同 recordStartTime 基準）
-//    - pos_m      : その最近接 pos サンプルの位置（補間しない）
-//    - vel_ms     : pos 側 t_ms 差分による central diff（±CSV_VEL_HALF_WIN サンプル）
+//    - pos_m      : freq_t_true 前後 2 pos サンプルの線形補間位置
+//    - vel_ms     : posCentralDiffVel を前後インデックスで線形補間した速度
 //   freq_t_s と pos_t_s を別列で保持することで、両系列の物理時刻整合
 //   (SAMPLING_TAIL_MS / POS_TAIL の妥当性) をオフラインで検証できる。
 //  周波数データなし: 位置のみ
@@ -1380,16 +1376,14 @@ function buildCsv() {
       const adjTrueMs = f.t_true_ms + samplingTailAdjMs;
       const freq_t_s  = (adjTrueMs - recordStartTime) / 1000;
 
-      // pos 側は最近接サンプルそのものを採用（補間しない）。
-      // 速度はその pos サンプル周辺 ±HALF_WIN の生 t_ms 差分で central diff。
-      const k = nearestPosIdx(adjTrueMs);
+      // pos を freq_t_true 前後 2 点で線形補間（pos_m・vel_ms ともに補間値）。
+      // pos_t_s は診断用に最近傍サンプルのタイムスタンプを記録。
+      const ip = interpolatePos(adjTrueMs, HALF_WIN);
       let pos_t_s_str = '', pos_m_str = '', vel_ms_str = '';
-      if (k >= 0) {
-        const p = posSession[k];
-        pos_t_s_str = ((p.t_ms - recordStartTime) / 1000).toFixed(4);
-        pos_m_str   = p.pos_m.toFixed(6);
-        const v = posCentralDiffVel(k, HALF_WIN);
-        if (v !== null) vel_ms_str = v.toFixed(6);
+      if (ip) {
+        pos_t_s_str = ((ip.t_ms_nearest - recordStartTime) / 1000).toFixed(4);
+        pos_m_str   = ip.pos_m.toFixed(6);
+        if (ip.vel_ms !== null) vel_ms_str = ip.vel_ms.toFixed(6);
       }
 
       const freq_w    = computeWeightedFreq(freqSession, i, HALF_WIN);
