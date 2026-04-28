@@ -1183,10 +1183,10 @@ function calibrateSamplingTail() {
       const f = freqSession[i];
       if (f.freq_hz <= 0 || (f.amplitude ?? 0) < 300) continue;
       // τ だけシフトした時刻で pos を探す
-      const ip = interpolatePos(f.t_true_ms + tau, HALF);
-      if (!ip || ip.vel_ms === null) continue;
-      const v = ip.vel_ms;
-      if (Math.abs(v) < 0.02 || Math.abs(v) > 2.5) continue;
+      const k = nearestPosIdx(f.t_true_ms + tau);
+      if (k < 0) continue;
+      const v = posCentralDiffVel(k, HALF);
+      if (v === null || Math.abs(v) < 0.02 || Math.abs(v) > 2.5) continue;
       const fw = computeWeightedFreq(freqSession, i, FREQ_W_HALF_WIN);
       if (fw <= 0) continue;
       const df = fw - f0;
@@ -1328,6 +1328,21 @@ function interpolatePos(t_ms, halfWin) {
     vel_ms = p0.vel_ms + alpha * (p1.vel_ms - p0.vel_ms);
   }
   return { pos_m, vel_ms, t_ms_nearest: alpha <= 0.5 ? p0.t_ms : p1.t_ms };
+}
+
+// calibrateSamplingTail 専用: posSession で t_ms に最も近いサンプルの index を返す。
+// τ スキャンでは離散的なインデックスジャンプが必要なため補間を使わない。
+function nearestPosIdx(t_ms) {
+  const n = posSession.length;
+  if (n === 0) return -1;
+  if (t_ms <= posSession[0].t_ms) return 0;
+  if (t_ms >= posSession[n - 1].t_ms) return n - 1;
+  let lo = 0, hi = n - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (posSession[mid].t_ms <= t_ms) lo = mid; else hi = mid;
+  }
+  return (t_ms - posSession[lo].t_ms) <= (posSession[hi].t_ms - t_ms) ? lo : hi;
 }
 
 // pos 側 t_ms 差分による central-diff 速度。pos サンプル posIdx の周辺
