@@ -275,6 +275,10 @@ const MAX_POINTS         = 300;
 //   初回受信時刻を基点に ESP32 内部時計で補外し、
 //   SAMPLING_TAIL_MS で「窓中点 → BLE 受信」遅延を差し引く。
 //   内訳: 窓半分(≈27.5ms) + Goertzel(≈2ms) + BLE 転送(≈10ms) ≈ 約 37ms（実測補正値）
+//
+//   なお Smart Cart 側 pos.t_ms は BLE 到着時刻そのまま（POS_TAIL 補正なし）。
+//   freq と pos の物理時刻整合の検証材料を残すため、CSV では両者の時刻を
+//   freq_t_s / pos_t_s として別列で出力し、速度は pos 側 t_ms の差分で計算する。
 const SAMPLING_TAIL_MS      = 37;
 
 // 55ms インターバルで 180ms 超のギャップ = 3 パケット以上欠落
@@ -906,20 +910,17 @@ function drawScatter() {
   }
   ctxScatter.stroke();
 
-  // データ点（CSV_VEL_HALF_WIN で平均化した速度を使用）
+  // データ点（pos 側 t_ms ベースの central diff を使用）
   const HALF_WIN = CSV_VEL_HALF_WIN;
   const n = freqSession.length;
   let nShown = 0;
   for (let i = 0; i < n; i++) {
     const f = freqSession[i];
     if (f.freq_hz <= 0) continue;
-    const lo = Math.max(0, i - HALF_WIN), hi = Math.min(n-1, i + HALF_WIN);
-    const pLo = interpolatePos(freqSession[lo].t_true_ms);
-    const pHi = interpolatePos(freqSession[hi].t_true_ms);
-    if (!pLo || !pHi) continue;
-    const dt = freqSession[hi].elapsed_s - freqSession[lo].elapsed_s;
-    if (dt <= 0) continue;
-    const v = (pHi.pos_m - pLo.pos_m) / dt;
+    const k = nearestPosIdx(f.t_true_ms);
+    if (k < 0) continue;
+    const v = posCentralDiffVel(k, HALF_WIN);
+    if (v === null) continue;
     if (Math.abs(v) > 5) continue;  // エンコーダー異常除外
     const fw = computeWeightedFreq(freqSession, i, FREQ_W_HALF_WIN);
     if (fw <= 0) continue;          // 有効な加重平均がない窓は除外
@@ -1189,10 +1190,46 @@ function interpolatePos(t_ms) {
   };
 }
 
+// posSession で t_ms に最も近いサンプルの index を返す（補間なし）。
+// freq フレームと pos サンプルを 1:1 で対応付けるのに使う。
+function nearestPosIdx(t_ms) {
+  const n = posSession.length;
+  if (n === 0) return -1;
+  if (t_ms <= posSession[0].t_ms) return 0;
+  if (t_ms >= posSession[n - 1].t_ms) return n - 1;
+  let lo = 0, hi = n - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (posSession[mid].t_ms <= t_ms) lo = mid; else hi = mid;
+  }
+  return (t_ms - posSession[lo].t_ms) <= (posSession[hi].t_ms - t_ms) ? lo : hi;
+}
+
+// pos 側 t_ms 差分による central-diff 速度。pos サンプル posIdx の周辺
+// ±halfWin サンプルで (Δpos)/(Δt_ms) を取る。pos の生時刻を使うため
+// freq グリッドへの補間 LPF を経由しない。
+function posCentralDiffVel(posIdx, halfWin) {
+  const n = posSession.length;
+  if (posIdx < 0 || n === 0) return null;
+  const lo = Math.max(0, posIdx - halfWin);
+  const hi = Math.min(n - 1, posIdx + halfWin);
+  if (hi <= lo) return null;
+  const dtMs = posSession[hi].t_ms - posSession[lo].t_ms;
+  if (dtMs <= 0) return null;
+  return (posSession[hi].pos_m - posSession[lo].pos_m) / (dtMs / 1000);
+}
+
 // ═══════════════════════════════════════════════
 //  CSV 出力
-//  周波数データあり → 周波数基準・位置を補間してマージ
-//  周波数データなし → 位置のみ
+//  周波数データあり:
+//    - elapsed_s  : freq の ESP32 内部時計基準（gap 検出用、freq 系列内で完結）
+//    - freq_t_s   : freq 窓中点のブラウザ時刻（recordStartTime 基準・SAMPLING_TAIL 補正済）
+//    - pos_t_s    : 各 freq フレームに最近接の pos サンプル到着時刻（同 recordStartTime 基準）
+//    - pos_m      : その最近接 pos サンプルの位置（補間しない）
+//    - vel_ms     : pos 側 t_ms 差分による central diff（±CSV_VEL_HALF_WIN サンプル）
+//   freq_t_s と pos_t_s を別列で保持することで、両系列の物理時刻整合
+//   (SAMPLING_TAIL_MS / POS_TAIL の妥当性) をオフラインで検証できる。
+//  周波数データなし: 位置のみ
 // ═══════════════════════════════════════════════
 function buildCsv() {
   if (freqSession.length > 0) {
@@ -1202,37 +1239,31 @@ function buildCsv() {
       const f_hz = GOERTZEL_FREQ_LOW + b * GOERTZEL_FREQ_STEP;
       magHeaders.push(`mag_${f_hz.toFixed(0)}`);
     }
-    let out = 'elapsed_s,pos_m,vel_ms,freq_hz,amplitude,gap_ok,freq_w_hz,'
+    let out = 'elapsed_s,freq_t_s,pos_t_s,pos_m,vel_ms,freq_hz,amplitude,gap_ok,freq_w_hz,'
             + magHeaders.join(',') + '\n';
 
-    const n = freqSession.length;
-    const posMerged = freqSession.map(f => {
-      const p = interpolatePos(f.t_true_ms);
-      return p ? p.pos_m : null;
-    });
-
-    // vel: 周波数フレームに同期した中央差分
-    // 55ms サイクルでは CSV_VEL_HALF_WIN=3 でおよそ 330ms 幅に相当する
     const HALF_WIN = CSV_VEL_HALF_WIN;
-    for (let i = 0; i < n; i++) {
-      const f     = freqSession[i];
-      const pos_m = posMerged[i];
+    const n = freqSession.length;
 
-      const lo  = Math.max(0, i - HALF_WIN);
-      const hi  = Math.min(n - 1, i + HALF_WIN);
-      const pLo = interpolatePos(freqSession[lo].t_true_ms);
-      const pHi = interpolatePos(freqSession[hi].t_true_ms);
-      let vel_ms = 0;
-      if (pLo && pHi) {
-        const dt = freqSession[hi].elapsed_s - freqSession[lo].elapsed_s;
-        if (dt > 0) vel_ms = (pHi.pos_m - pLo.pos_m) / dt;
+    for (let i = 0; i < n; i++) {
+      const f        = freqSession[i];
+      const freq_t_s = (f.t_true_ms - recordStartTime) / 1000;
+
+      // pos 側は最近接サンプルそのものを採用（補間しない）。
+      // 速度はその pos サンプル周辺 ±HALF_WIN の生 t_ms 差分で central diff。
+      const k = nearestPosIdx(f.t_true_ms);
+      let pos_t_s_str = '', pos_m_str = '', vel_ms_str = '';
+      if (k >= 0) {
+        const p = posSession[k];
+        pos_t_s_str = ((p.t_ms - recordStartTime) / 1000).toFixed(4);
+        pos_m_str   = p.pos_m.toFixed(6);
+        const v = posCentralDiffVel(k, HALF_WIN);
+        if (v !== null) vel_ms_str = v.toFixed(6);
       }
 
-      const freq_w = computeWeightedFreq(freqSession, i, HALF_WIN);
-
-      const pos_str  = pos_m !== null ? pos_m.toFixed(6) : '';
-      const amp_str  = (f.amplitude !== null && f.amplitude !== undefined)
-                       ? f.amplitude.toFixed(4) : '';
+      const freq_w    = computeWeightedFreq(freqSession, i, HALF_WIN);
+      const amp_str   = (f.amplitude !== null && f.amplitude !== undefined)
+                         ? f.amplitude.toFixed(4) : '';
       const freq_w_str = freq_w > 0 ? freq_w.toFixed(4) : '';
 
       // スペクトル列: mag[b] = mag_q[b] * mag_scale で復元
@@ -1245,7 +1276,7 @@ function buildCsv() {
         mags.fill('');
       }
 
-      out += `${f.elapsed_s.toFixed(4)},${pos_str},${vel_ms.toFixed(6)},`
+      out += `${f.elapsed_s.toFixed(4)},${freq_t_s.toFixed(4)},${pos_t_s_str},${pos_m_str},${vel_ms_str},`
            + `${f.freq_hz.toFixed(2)},${amp_str},${f.gap_ok},${freq_w_str},`
            + mags.join(',') + '\n';
     }
