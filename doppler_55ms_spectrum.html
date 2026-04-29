@@ -290,8 +290,12 @@ for (let s = 0; s <= 9; s++) {
 const DEVICE_SERVICE    = '4a5c0000-0000-0000-0000-5c1e741f1c00';
 const DEVICE_CMD_CHAR   = '4a5c0000-0002-0000-0000-5c1e741f1c00';
 const POSITION_SERVICE  = '4a5c0003-0000-0000-0000-5c1e741f1c00';
-const POSITION_CMD_CHAR = '4a5c0003-0002-0000-0000-5c1e741f1c00';
-const POSITION_ACK_CHAR = '4a5c0003-0005-0000-0000-5c1e741f1c00';
+const POSITION_CMD_CHAR  = '4a5c0003-0002-0000-0000-5c1e741f1c00';
+const POSITION_BURST_CHAR = '4a5c0003-0004-0000-0000-5c1e741f1c00';
+const POSITION_ACK_CHAR  = '4a5c0003-0005-0000-0000-5c1e741f1c00';
+
+const POS_RATE_HZ   = 100;
+const POS_PERIOD_MS = 1000 / POS_RATE_HZ;  // 10ms
 
 const POS_SCALE          = 0.09895 / 816;  // count → meter
 const SAMPLE_INTERVAL_MS = 55;
@@ -313,9 +317,8 @@ const SAMPLING_TAIL_MS      = 37;
 const FREQ_GAP_THRESHOLD_MS = 180;
 
 // CSV 出力・散布図で使う速度計算の半窓幅（中央差分の ±HALF_WIN フレーム）
-// ±3(165ms) だと freq-vel 時刻整合ずれの影響で slope が約 9% 低下する。
-// ±6(330ms) に広げると当該バイアスが平均化されて slope ≈ 0.98×理論値に改善。
-const CSV_VEL_HALF_WIN = 6;
+// pos が 100Hz (10ms 間隔) になったため ±3(30ms) で十分。
+const CSV_VEL_HALF_WIN = 3;
 
 // ═══════════════════════════════════════════════
 //  Smart Cart 状態
@@ -332,8 +335,7 @@ let latestVelocity    = 0;
 let notifyReceived    = false;
 let lastNotifyTime    = 0;   // notify 到着時刻 [ms]
 let lastNotifyPos     = 0;   // notify 到着時の位置 [m]
-// devRecv (0000-0003) と char0003 (0003-0003) が同一パケットを二重発火するのを抑止する閾値
-const DUPLICATE_GUARD_MS = 20;
+let posBurstCarry     = [];  // ATT 20-byte 上限による奇数 byte の持ち越しバッファ
 
 // ═══════════════════════════════════════════════
 //  Freq Sensor (ESP32) 状態
@@ -393,70 +395,64 @@ const PACKET_HEADER_BYTES = 16;
 const PACKET_TOTAL_BYTES  = PACKET_HEADER_BYTES + N_BINS * 2;  // 178
 
 // ═══════════════════════════════════════════════
-//  BLE notify コールバック（Smart Cart 位置）
+//  BLE notify コールバック（Smart Cart 位置バースト）
+//  0003-0004 から届く高レートストリーミングデータを処理する。
+//  フォーマット: [seq(1)] [rawChange_lo, rawChange_hi] × N
+//  ATT payload 上限 20 bytes のため 100Hz では 1 パケット = 19 bytes のペイロード
+//  (9.5 サンプル相当) となり、半端な lo byte を carry バッファで次パケットに持ち越す。
 // ═══════════════════════════════════════════════
-function handlePositionNotify(event) {
+function handlePosBurst(event) {
   const data = event.target.value;
+  if (data.byteLength < 1) return;
 
-  let rawChange = null;
-  let isOneShot = false;
-
-  if (data.byteLength >= 5 &&
-      data.getUint8(0) === 0xC0 &&
-      data.getUint8(1) === 0x00 &&
-      data.getUint8(2) === 0x05) {
-    // One-shot レスポンス（poll への応答）。seqNum を持たないため
-    // 後段の time-based dedup で二重発火を抑止する。
-    rawChange = data.getInt16(3, true);
-    isOneShot = true;
-  } else if (data.byteLength >= 3 && data.getUint8(0) <= 0x1F) {
-    // 周期データ（seqNum 0..0x1F）。重複は seqNum で確実に弾ける。
-    const seq = data.getUint8(0);
-    if (seq === lastPacketSeq) return;             // 完全重複
-    if (lastPacketSeq >= 0 && seq !== ((lastPacketSeq + 1) & 0x1F)) {
-      const lost = ((seq - lastPacketSeq - 1) + 32) & 0x1F;
-      console.warn(`[pos] seq gap: ${lastPacketSeq} -> ${seq} (${lost} pkt lost)`);
-    }
-    lastPacketSeq = seq;
-    rawChange = data.getInt16(1, true);
-    if (posAckChar) {
-      posAckChar.writeValueWithoutResponse(new Uint8Array([seq])).catch(() => {});
-    }
+  const seq = data.getUint8(0);
+  if (seq === lastPacketSeq) return;
+  if (lastPacketSeq >= 0 && seq !== ((lastPacketSeq + 1) & 0xFF)) {
+    const lost = ((seq - lastPacketSeq - 1 + 256) & 0xFF);
+    console.warn(`[pos burst] seq gap: ${lastPacketSeq} → ${seq} (${lost} lost)`);
+    posBurstCarry = [];  // gap 時はキャリーを捨てる（データ不整合防止）
   }
+  lastPacketSeq = seq;
 
-  if (rawChange === null) return;
+  // carry + 今回 payload を結合
+  const payload = [];
+  for (let i = 1; i < data.byteLength; i++) payload.push(data.getUint8(i));
+  const bytes = posBurstCarry.concat(payload);
 
-  const now = performance.now();
+  const nSamples = Math.floor(bytes.length / 2);
+  const t_recv   = performance.now();
 
-  // One-shot 0xC0 は seqNum を持たず、devRecv と char0003 から
-  // 同一パケットが二重に届いた場合に位置が二重加算される。
-  // 直前 notify から DUPLICATE_GUARD_MS 以内の one-shot は捨てる。
-  if (isOneShot && lastNotifyTime > 0 && (now - lastNotifyTime) < DUPLICATE_GUARD_MS) {
-    return;
-  }
+  for (let i = 0; i < nSamples; i++) {
+    const lo = bytes[2 * i];
+    const hi = bytes[2 * i + 1];
+    const raw = lo | (hi << 8);
+    const rawChange = raw >= 0x8000 ? raw - 0x10000 : raw;
+    countAccumulated += rawChange;
+    const newPos = countAccumulated * POS_SCALE;
+    // バースト内タイムスタンプを等間隔で逆算（最後のサンプルが t_recv）
+    const t_ms = t_recv - (nSamples - 1 - i) * POS_PERIOD_MS;
 
-  countAccumulated += rawChange;
-  const newPos = countAccumulated * POS_SCALE;
-
-  // 速度: notify 到着時刻ベースの中央差分（≥20ms ガード）
-  if (lastNotifyTime > 0) {
-    const dt = (now - lastNotifyTime) / 1000;
-    if (dt >= 0.020) {
-      latestVelocity = (newPos - lastNotifyPos) / dt;
-      lastNotifyTime = now;
-      lastNotifyPos  = newPos;
+    if (lastNotifyTime > 0 && t_ms > lastNotifyTime) {
+      latestVelocity = (newPos - lastNotifyPos) / ((t_ms - lastNotifyTime) / 1000);
     }
-  } else {
-    lastNotifyTime = now;
+    lastNotifyTime = t_ms;
     lastNotifyPos  = newPos;
-  }
-  latestPosition = newPos;
-  notifyReceived = true;
+    latestPosition = newPos;
+    notifyReceived = true;
 
-  // イベント駆動で記録（BLE 到着時刻を正確なタイムスタンプとして使用）
-  if (isRecording) {
-    const elapsed_s = (now - recordStartTime) / 1000;
-    posSession.push({ t_ms: now, elapsed_s, pos_m: newPos, vel_ms: latestVelocity });
+    if (isRecording) {
+      const elapsed_s = (t_ms - recordStartTime) / 1000;
+      posSession.push({ t_ms, elapsed_s, pos_m: newPos, vel_ms: latestVelocity });
+    }
+  }
+
+  posBurstCarry = bytes.slice(nSamples * 2);  // 奇数余りを次バーストへ持ち越す
+
+  // 8 バーストごとに ACK（SPARKvue の動作に合わせる）
+  if (posAckChar && (seq & 0x07) === 0x07) {
+    posAckChar.writeValueWithoutResponse(
+      new Uint8Array([0x00, 0x00, 0x00, 0x00, seq])
+    ).catch(() => {});
   }
 }
 
@@ -464,14 +460,6 @@ function handlePositionNotify(event) {
 //  BLE notify コールバック（ESP32 周波数）
 // ═══════════════════════════════════════════════
 function onFreqNotify(event) {
-  // pos ポーリングを freq notify 到着に同期させる。
-  // setInterval(55ms) のタイマジッター(±20ms)を排除し、
-  // pos_t_s が freq_recv_t + BLE_RTT という一定オフセットに収束する。
-  // 録画中・表示中を問わず毎フレームリクエストを送る。
-  if (posCmdChar) {
-    posCmdChar.writeValueWithoutResponse(new Uint8Array([0x05, 0x02])).catch(() => {});
-  }
-
   if (!isRecording) return;
 
   const dv = event.target.value;  // DataView
@@ -513,7 +501,7 @@ function onFreqNotify(event) {
 
   freqSession.push({ t_true_ms, elapsed_s, freq_hz, gap_ok, amplitude, mag_scale, mag_q });
 
-  // 位置チャートを ESP32 タイムスタンプに同期して更新（表示用のみ・記録は handlePositionNotify で行う）
+  // 位置チャートを ESP32 タイムスタンプに同期して更新（表示用のみ・記録は handlePosBurst で行う）
   if (notifyReceived) {
     posValues.push(latestPosition);
     velValues.push(latestVelocity);
@@ -545,16 +533,10 @@ function onFreqNotify(event) {
 }
 
 // ═══════════════════════════════════════════════
-//  55ms サンプラ（freq センサ未接続時のフォールバック）
-//  freq センサ接続中は onFreqNotify が pos ポーリングを担うため何もしない。
-//  freq センサ未接続（Cart のみ）の場合のみ setInterval でポーリングを継続する。
+//  サンプラタイマ（ストリーミング移行後は何もしない。タイマ枠は残す）
 // ═══════════════════════════════════════════════
 function sampleTick() {
-  if (isFreqConnected) return;  // freq 接続中は onFreqNotify に委譲
-  if (!isRecording) return;
-  if (posCmdChar) {
-    posCmdChar.writeValueWithoutResponse(new Uint8Array([0x05, 0x02])).catch(() => {});
-  }
+  // pos は 0003-0004 バーストで自律的に届くため polling 不要。
 }
 
 // ═══════════════════════════════════════════════
@@ -1057,27 +1039,30 @@ async function connectSmartCart() {
       const b = Array.from(new Uint8Array(e.target.value.buffer))
         .map(x => x.toString(16).padStart(2,'0')).join(' ');
       log(`[dev recv] ${b}`);
-      handlePositionNotify(e);
     });
-
-    await devCmd.writeValueWithoutResponse(new Uint8Array([0x37, 0x01, 0x00]));
-    log('Sent WIRELESS_RMS_START.');
-    await new Promise(r => setTimeout(r, 300));
 
     posCmdChar = await posSvc.getCharacteristic(POSITION_CMD_CHAR);
     posAckChar = await posSvc.getCharacteristic(POSITION_ACK_CHAR);
 
-    const char0003 = await posSvc.getCharacteristic('4a5c0003-0003-0000-0000-5c1e741f1c00');
-    await char0003.startNotifications();
-    char0003.addEventListener('characteristicvaluechanged', (e) => {
-      const b = Array.from(new Uint8Array(e.target.value.buffer))
-        .map(x => x.toString(16).padStart(2,'0')).join(' ');
-      log(`[pos 0003] ${b}`);
-      handlePositionNotify(e);
-    });
+    // バーストデータ (0003-0004) を購読
+    const char0004 = await posSvc.getCharacteristic(POSITION_BURST_CHAR);
+    await char0004.startNotifications();
+    char0004.addEventListener('characteristicvaluechanged', handlePosBurst);
+    log('Subscribed to pos burst (0004).');
 
-    await posCmdChar.writeValueWithoutResponse(new Uint8Array([0x05, 0x02]));
-    log('Test request sent.');
+    // 100Hz レート設定: 01 [10000µs LE32] [2 bytes/sample LE16]
+    await posCmdChar.writeValueWithoutResponse(
+      new Uint8Array([0x01, 0x10, 0x27, 0x00, 0x00, 0x02, 0x00])
+    );
+    log('Sent pos rate: 100Hz.');
+
+    // ストリーミングモード開始
+    await devCmd.writeValueWithoutResponse(new Uint8Array([0x37, 0x01, 0x01]));
+    log('Sent WIRELESS_RMS_START (streaming).');
+    await new Promise(r => setTimeout(r, 200));
+    // ↓ データが流れない場合はコメントを外す
+    // await devCmd.writeValueWithoutResponse(new Uint8Array([0x00]));
+    // log('Sent start trigger.');
 
     isCartConnected = true;
     setCartStatus('CONNECTED: ' + cartDevice.name, true);
@@ -1239,6 +1224,7 @@ function startRecording() {
   latestVelocity  = 0;
   lastNotifyTime  = 0;
   lastNotifyPos   = 0;
+  posBurstCarry   = [];
   prevFreqEspTime  = -1;
   firstFreqEspTime = -1;
   firstFreqRecvMs  = -1;
@@ -1265,7 +1251,7 @@ function stopRecording() {
 
 function resetAll() {
   stopRecording();
-  countAccumulated = 0; lastPacketSeq = -1;
+  countAccumulated = 0; lastPacketSeq = -1; posBurstCarry = [];
   latestPosition = 0; notifyReceived = false;
   latestVelocity = 0; lastNotifyTime = 0; lastNotifyPos = 0;
   ampThreshold = 100; ampThresholdIsAuto = true;
