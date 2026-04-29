@@ -1094,6 +1094,15 @@ async function connectSmartCart() {
     await devCmd.writeValueWithoutResponse(new Uint8Array([0x00]));
     log('Sent start trigger.');
 
+    // バースト watchdog: startトリガから 2s 以内にデータが届かなければ警告。
+    // 06 af 05 の中央 byte が session 状態に依存している場合などに検出できる。
+    const seqAtStart = lastPacketSeq;
+    setTimeout(() => {
+      if (lastPacketSeq === seqAtStart) {
+        log('[WARN] No burst data after 2s. 06 af 05 middle byte may need adjustment, or stream did not start.');
+      }
+    }, 2000);
+
     isCartConnected = true;
     setCartStatus('CONNECTED: ' + cartDevice.name, true);
     updateButtonStates();
@@ -1254,8 +1263,10 @@ function startRecording() {
   latestVelocity  = 0;
   lastNotifyTime  = 0;
   lastNotifyPos   = 0;
-  posBurstCarry   = [];
-  lastSampleEndTime = 0;
+  // posBurstCarry / lastSampleEndTime は意図的にリセットしない。
+  // 接続中は 100Hz バースト decoder が連続動作しており、録画開始は
+  // 「以後のサンプルを posSession に保存し始める」だけの境界である。
+  // 途中でキャリーや逐次クロックを壊すと int16 が 1 byte ずれて位置が化ける。
   prevFreqEspTime  = -1;
   firstFreqEspTime = -1;
   firstFreqRecvMs  = -1;
