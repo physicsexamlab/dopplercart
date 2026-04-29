@@ -1,0 +1,1502 @@
+<!--
+  Physics Exam Lab - Doppler Cart (Combined Monitor)
+  Copyright (c) 2026 一般社団法人 国際物理オリンピック2023記念協会
+  Licensed under the Creative Commons BY-NC 4.0 International License.
+  See https://creativecommons.org/licenses/by-nc/4.0/
+-->
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Doppler Cart - 55ms Spectrum Monitor (2kHz)</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Exo+2:wght@300;600;800&display=swap');
+
+  :root {
+    --bg:        #f0f4f8;
+    --panel:     #ffffff;
+    --border:    #bdd0e4;
+    --text:      #1a2b3c;
+    --dim:       #6b8099;
+    --header-bg: rgba(240,244,248,0.95);
+    --grid-line: rgba(0,80,160,0.04);
+
+    --col-pos:   #0077cc;
+    --col-vel:   #4a8c00;
+    --col-freq:  #cc6600;
+    --danger:    #d42045;
+    --warn:      #b86e00;
+    --accent2:   #008855;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: 'Exo 2', sans-serif; font-weight: 300;
+    min-height: 100vh; display: flex; flex-direction: column;
+  }
+  body::before {
+    content: ''; position: fixed; inset: 0;
+    background-image:
+      linear-gradient(var(--grid-line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+    background-size: 40px 40px; pointer-events: none; z-index: 0;
+  }
+
+  header {
+    position: relative; z-index: 10;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 28px; border-bottom: 1px solid var(--border);
+    background: var(--header-bg); backdrop-filter: blur(10px);
+  }
+  .logo {
+    font-size: 1.15rem; font-weight: 800; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--col-pos);
+  }
+  .logo em { font-style: normal; color: var(--col-freq); }
+
+  .status-group { display: flex; gap: 20px; align-items: center; }
+
+  .status-badge {
+    display: flex; align-items: center; gap: 7px;
+    font-family: 'Share Tech Mono', monospace; font-size: 0.78rem; color: var(--dim);
+  }
+  .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--dim); }
+  .status-badge.connected { color: var(--accent2); }
+  .status-badge.connected .status-dot { background: var(--accent2); animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+  main {
+    position: relative; z-index: 1; flex: 1;
+    display: flex; flex-direction: column; gap: 18px;
+    padding: 20px 28px; max-width: 1400px; width: 100%; margin: 0 auto;
+  }
+
+  .controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  button {
+    font-family: 'Exo 2', sans-serif; font-weight: 600; font-size: 0.82rem;
+    letter-spacing: 0.08em; text-transform: uppercase; padding: 9px 20px;
+    border-radius: 4px; border: 1px solid transparent; cursor: pointer;
+    transition: all 0.2s; background: transparent;
+  }
+  button:disabled { opacity: 0.35; cursor: not-allowed; }
+  .btn-connect-cart { border-color: var(--col-pos); color: var(--col-pos); }
+  .btn-connect-cart:hover:not(:disabled) { background: var(--col-pos); color: #fff; }
+  .btn-connect-freq { border-color: var(--col-freq); color: var(--col-freq); }
+  .btn-connect-freq:hover:not(:disabled) { background: var(--col-freq); color: #fff; }
+  .btn-start { border-color: var(--accent2); color: var(--accent2); }
+  .btn-start:hover:not(:disabled) { background: var(--accent2); color: #fff; }
+  .btn-stop  { border-color: var(--danger); color: var(--danger); }
+  .btn-stop:hover:not(:disabled) { background: var(--danger); color: #fff; }
+  .btn-reset { border-color: var(--dim); color: var(--dim); }
+  .btn-reset:hover:not(:disabled) { background: var(--dim); color: #fff; }
+  .btn-csv   { border-color: var(--warn); color: var(--warn); margin-left: auto; }
+  .btn-csv:hover:not(:disabled) { background: var(--warn); color: #fff; }
+
+  .stats-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  @media (max-width: 700px) { .stats-row { grid-template-columns: repeat(2, 1fr); } }
+  .stat-card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+    padding: 12px 16px;
+  }
+  .stat-card.pos  { border-left: 3px solid var(--col-pos); }
+  .stat-card.vel  { border-left: 3px solid var(--col-vel); }
+  .stat-card.freq { border-left: 3px solid var(--col-freq); }
+  .stat-label { font-size: 0.65rem; text-transform: uppercase; color: var(--dim); margin-bottom: 4px; }
+  .stat-value { font-family: 'Share Tech Mono', monospace; font-size: 1.4rem; }
+
+  .chart-panel {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 16px 18px;
+  }
+  .chart-panel.pos  { border-top: 2px solid var(--col-pos); }
+  .chart-panel.vel  { border-top: 2px solid var(--col-vel); }
+  .chart-panel.freq { border-top: 2px solid var(--col-freq); }
+  .shared-time-axis {
+    font-family: 'Share Tech Mono', monospace; font-size: 0.72rem;
+    color: var(--dim); text-align: center; letter-spacing: 0.08em;
+    text-transform: uppercase; margin-top: -6px;
+  }
+  .chart-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 12px; }
+  .chart-title  { font-size: 0.7rem; letter-spacing: 0.15em; text-transform: uppercase; color: var(--dim); }
+
+  .modal-overlay {
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.4);
+    backdrop-filter: blur(4px); z-index: 100; align-items: center; justify-content: center;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal {
+    background: var(--panel); padding: 24px; width: min(720px, 95vw);
+    border-radius: 8px; display: flex; flex-direction: column; gap: 14px;
+  }
+  textarea.csv-out {
+    min-height: 300px; font-family: 'Share Tech Mono', monospace;
+    font-size: 0.78rem; padding: 10px; border: 1px solid var(--border); border-radius: 4px;
+  }
+  .modal-footer { display: flex; justify-content: space-between; align-items: center; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">Doppler Cart <em>55ms</em> Spectrum Monitor <em>2kHz</em></div>
+  <div class="status-group">
+    <div class="status-badge" id="cartBadge">
+      <div class="status-dot"></div>
+      <span id="cartText">CART: —</span>
+    </div>
+    <div class="status-badge" id="freqBadge">
+      <div class="status-dot"></div>
+      <span id="freqText">FREQ: —</span>
+    </div>
+  </div>
+</header>
+
+<main>
+  <div class="controls">
+    <button class="btn-connect-cart" id="btnConnectCart">Connect Smart Cart</button>
+    <button class="btn-connect-freq" id="btnConnectFreq">Connect Freq Sensor</button>
+    <button class="btn-start" id="btnStart" disabled>Record</button>
+    <button class="btn-stop"  id="btnStop"  disabled>Stop</button>
+    <button class="btn-reset" id="btnReset" disabled>Reset</button>
+    <button class="btn-csv"   id="btnCsv"   disabled>CSV Export</button>
+    <label style="display:flex;align-items:center;gap:7px;font-size:0.78rem;color:var(--dim);margin-left:10px;">
+      Amp ≥
+      <input type="range" id="ampSlider" min="0" max="500" step="10" value="100" style="width:80px;accent-color:var(--col-freq);">
+      <span id="ampSliderVal" style="font-family:'Share Tech Mono',monospace;min-width:2.5em;">100</span>
+    </label>
+  </div>
+
+  <div class="stats-row">
+    <div class="stat-card pos">
+      <div class="stat-label">Position</div>
+      <div class="stat-value" id="sPosLast">—</div>
+    </div>
+    <div class="stat-card vel">
+      <div class="stat-label">Velocity</div>
+      <div class="stat-value" id="sVelLast">—</div>
+    </div>
+    <div class="stat-card freq">
+      <div class="stat-label">Frequency</div>
+      <div class="stat-value" id="sFreqLast">—</div>
+    </div>
+    <div class="stat-card" style="border-left:3px solid var(--accent2);">
+      <div class="stat-label">f₀ (静止時基準) / Amplitude</div>
+      <div class="stat-value" id="sFRefAmp" style="font-size:1.05rem;">—</div>
+    </div>
+  </div>
+
+  <div style="display:flex; flex-direction:column; gap:16px;">
+    <div class="chart-panel pos">
+      <div class="chart-header">
+        <div class="chart-title">Position (m)</div>
+        <div id="posAxisLabel" style="font-family:'Share Tech Mono',monospace;font-size:0.7rem;color:var(--dim);"></div>
+      </div>
+      <canvas id="chartPos" height="180"></canvas>
+    </div>
+    <div class="chart-panel vel">
+      <div class="chart-header">
+        <div class="chart-title">Velocity (m/s)</div>
+        <div id="velAxisLabel" style="font-family:'Share Tech Mono',monospace;font-size:0.7rem;color:var(--dim);"></div>
+      </div>
+      <canvas id="chartVel" height="140"></canvas>
+    </div>
+    <div class="chart-panel freq">
+      <div class="chart-header">
+        <div class="chart-title">Frequency (Hz) <span style="font-size:0.65rem;color:var(--dim);">— 振幅フィルタ済み</span></div>
+        <div id="freqAxisLabel" style="font-family:'Share Tech Mono',monospace;font-size:0.7rem;color:var(--dim);"></div>
+      </div>
+      <canvas id="chartFreq" height="180"></canvas>
+    </div>
+    <div class="shared-time-axis">Time (s)</div>
+
+    <div class="chart-panel" style="border-top:2px solid #444;">
+      <div class="chart-header">
+        <div class="chart-title">Doppler Scatter — v (m/s) vs. Δf = f<sub>obs</sub> − f₀ (Hz)</div>
+        <div id="scatterInfo" style="font-family:'Share Tech Mono',monospace;font-size:0.7rem;color:var(--dim);"></div>
+      </div>
+      <canvas id="chartScatter" height="260"></canvas>
+    </div>
+
+    <!-- ─── SAMPLING_TAIL 校正パネル（Stop 後に表示） ─── -->
+    <div id="calibPanel" style="display:none; margin-top:4px; padding:10px 16px;
+         background:var(--panel); border:1px solid var(--border); border-radius:6px;
+         font-size:0.8rem; line-height:1.8;">
+      <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
+        <strong style="color:var(--accent); font-size:0.85rem;">SAMPLING_TAIL 校正</strong>
+        <span style="color:var(--dim); font-size:0.72rem;">
+          Stop 後に τ を ±80 ms スキャンして R² 最大点を推奨値として表示
+        </span>
+      </div>
+      <div style="display:flex; flex-wrap:wrap; gap:18px; align-items:center;">
+        <span>τ<sub>opt</sub> = <span id="calTau"
+          style="font-family:'Share Tech Mono',monospace; color:var(--accent);">—</span> ms</span>
+        <span>推奨 SAMPLING_TAIL =
+          <span id="calTail" style="font-family:'Share Tech Mono',monospace; color:var(--accent);">—</span>
+          ms <span style="color:var(--dim);">(現行 37 ms)</span></span>
+        <span>R²:
+          <span id="calR2Before" style="font-family:'Share Tech Mono',monospace;">—</span>
+          → <span id="calR2After"  style="font-family:'Share Tech Mono',monospace; color:#4caf50;">—</span></span>
+        <span>slope/理論:
+          <span id="calRatioBefore" style="font-family:'Share Tech Mono',monospace;">—</span>
+          → <span id="calRatioAfter"  style="font-family:'Share Tech Mono',monospace; color:#4caf50;">—</span></span>
+        <button id="btnApplyCal" class="btn-start"
+          style="padding:3px 14px; font-size:0.78rem; min-width:0;">適用</button>
+        <span id="calApplied" style="color:#4caf50; display:none;">✓ 適用済み</span>
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer style="position:relative;z-index:1;text-align:center;padding:10px 28px 14px;font-size:0.65rem;color:var(--dim);border-top:1px solid var(--border);">
+  Physics Exam Lab - Doppler Cart &nbsp;|&nbsp;
+  Copyright &copy; 2026 一般社団法人 国際物理オリンピック2023記念協会 &nbsp;|&nbsp;
+  <a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank" rel="noopener"
+     style="color:var(--dim);text-decoration:underline;">CC BY-NC 4.0</a>
+</footer>
+
+<div class="modal-overlay" id="csvModal">
+  <div class="modal">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <h2 style="font-size:1rem; font-weight:600;">CSV Data</h2>
+      <button id="btnCloseModal" style="border:none; background:none; font-size:1.5rem; cursor:pointer; line-height:1;">✕</button>
+    </div>
+    <textarea class="csv-out" id="csvOutput" readonly></textarea>
+    <div class="modal-footer">
+      <span id="csvRowCount" style="font-size:0.75rem; color:var(--dim);"></span>
+      <div style="display:flex; gap:8px;">
+        <button class="btn-reset" id="btnCopy">Copy</button>
+        <button class="btn-csv"   id="btnDownload">Download</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════
+//  定数
+// ═══════════════════════════════════════════════
+
+// PASCO Smart Cart UUIDs
+const ALL_PASCO_UUIDS = [];
+for (let s = 0; s <= 9; s++) {
+  ALL_PASCO_UUIDS.push(`4a5c000${s}-0000-0000-0000-5c1e741f1c00`);
+  for (let c = 1; c <= 9; c++) {
+    ALL_PASCO_UUIDS.push(`4a5c000${s}-000${c}-0000-0000-5c1e741f1c00`);
+  }
+}
+const DEVICE_SERVICE    = '4a5c0000-0000-0000-0000-5c1e741f1c00';
+const DEVICE_CMD_CHAR   = '4a5c0000-0002-0000-0000-5c1e741f1c00';
+const POSITION_SERVICE  = '4a5c0003-0000-0000-0000-5c1e741f1c00';
+const POSITION_CMD_CHAR = '4a5c0003-0002-0000-0000-5c1e741f1c00';
+const POSITION_ACK_CHAR = '4a5c0003-0005-0000-0000-5c1e741f1c00';
+
+const POS_SCALE          = 0.09895 / 816;  // count → meter
+const SAMPLE_INTERVAL_MS = 55;
+const MAX_POINTS         = 300;
+
+// ESP32 BLE 遅延補正:
+//   ファームは窓中点 (t0+t1)/2 をタイムスタンプとして送信。
+//   t_true_ms = firstFreqRecvMs + elapsed_s*1000 - SAMPLING_TAIL_MS
+//   初回受信時刻を基点に ESP32 内部時計で補外し、
+//   SAMPLING_TAIL_MS で「窓中点 → BLE 受信」遅延を差し引く。
+//   内訳: 窓半分(≈27.5ms) + Goertzel(≈2ms) + BLE 転送(≈10ms) ≈ 約 37ms（実測補正値）
+//
+//   なお Smart Cart 側 pos.t_ms は BLE 到着時刻そのまま（POS_TAIL 補正なし）。
+//   freq と pos の物理時刻整合の検証材料を残すため、CSV では両者の時刻を
+//   freq_t_s / pos_t_s として別列で出力し、速度は pos 側 t_ms の差分で計算する。
+const SAMPLING_TAIL_MS      = 37;
+
+// 55ms インターバルで 180ms 超のギャップ = 3 パケット以上欠落
+const FREQ_GAP_THRESHOLD_MS = 180;
+
+// CSV 出力・散布図で使う速度計算の半窓幅（中央差分の ±HALF_WIN フレーム）
+// ±3(165ms) だと freq-vel 時刻整合ずれの影響で slope が約 9% 低下する。
+// ±6(330ms) に広げると当該バイアスが平均化されて slope ≈ 0.98×理論値に改善。
+const CSV_VEL_HALF_WIN = 6;
+
+// ═══════════════════════════════════════════════
+//  Smart Cart 状態
+// ═══════════════════════════════════════════════
+let cartDevice       = null;
+let posCmdChar       = null;
+let posAckChar       = null;
+let isCartConnected  = false;
+
+let countAccumulated  = 0;
+let lastPacketSeq     = -1;
+let latestPosition    = 0;
+let latestVelocity    = 0;
+let notifyReceived    = false;
+let lastNotifyTime    = 0;   // notify 到着時刻 [ms]
+let lastNotifyPos     = 0;   // notify 到着時の位置 [m]
+// devRecv (0000-0003) と char0003 (0003-0003) が同一パケットを二重発火するのを抑止する閾値
+const DUPLICATE_GUARD_MS = 20;
+
+// ═══════════════════════════════════════════════
+//  Freq Sensor (ESP32) 状態
+// ═══════════════════════════════════════════════
+let freqDevice      = null;
+let freqChar        = null;
+let isFreqConnected = false;
+let prevFreqEspTime  = -1;   // gap 検出用（ESP32 内部時刻 [s]）
+let firstFreqEspTime = -1;  // elapsed_s 計算基準（ESP32 内部時刻 [s]）
+let firstFreqRecvMs  = -1;  // t_true_ms 計算基準（ブラウザ時刻 [ms]）
+
+// ═══════════════════════════════════════════════
+//  録画状態
+// ═══════════════════════════════════════════════
+let isRecording     = false;
+let recordStartTime = 0;
+let samplerTimerId  = null;
+let samplingTailAdjMs = 0;   // calibrateSamplingTail() が求める τ_opt [ms]。
+                              // nearestPosIdx / CSV の freq_t_s に加算して補正する。
+                              // 新 SAMPLING_TAIL = 37 − samplingTailAdjMs。
+
+// ═══════════════════════════════════════════════
+//  データバッファ
+// ═══════════════════════════════════════════════
+// フルセッション（CSV マージ・補間用）
+let posSession  = [];  // { t_ms, elapsed_s, pos_m, vel_ms }
+let freqSession = [];  // { t_true_ms, elapsed_s, freq_hz, gap_ok }
+
+// 表示用ローリングバッファ
+let posValues       = [];
+let velValues       = [];
+let velSmoothValues = [];  // 5点トレーリング平均
+let freqValues      = [];
+let freqWValues     = [];  // 振幅加重平均周波数（トレーリング窓）
+let posTimeValues   = [];  // 位置サンプルの elapsed_s（時間軸用）
+let freqTimeValues  = [];  // 周波数サンプルの elapsed_s（時間軸用）
+
+// 表示フィルタ・スムージング
+let ampThreshold = 100;      // 振幅フィルタ閾値（スライダーで変更）
+let ampThresholdIsAuto = true; // true: 停止時に静止振幅から自動算出、false: ユーザ手動
+const VEL_SMOOTH_WIN  = 5; // 速度平均窓幅
+const FREQ_W_HALF_WIN = 3; // 周波数振幅加重平均の半窓幅（165ms固定。vel窓とは独立）
+const GOERTZEL_FREQ_LOW  = 1960.0;  // Arduino FREQ_LOW  と一致させること
+const GOERTZEL_FREQ_HIGH = 2040.0; // Arduino FREQ_HIGH と一致させること
+const GOERTZEL_FREQ_STEP = 1.0;    // Arduino FREQ_STEP と一致させること
+const N_BINS             = Math.round((GOERTZEL_FREQ_HIGH - GOERTZEL_FREQ_LOW) / GOERTZEL_FREQ_STEP) + 1;  // 81
+
+// バイナリパケット形式（doppler-cart-n800-spectrum.ino と一致させること）
+//   offset  size  type         field
+//   ------  ----  -----------  ----------------------------------------
+//   0       4     float32 LE   t_esp_s (窓中点秒)
+//   4       4     float32 LE   freq_hz (-1.0 = 無効)
+//   8       4     float32 LE   amplitude
+//   12      4     float32 LE   mag_scale (mag_q[] の 1 LSB が表す mag 値)
+//   16      162   uint16 LE x81  mag_q[b]  (= round(mag[b] / mag_scale))
+const PACKET_HEADER_BYTES = 16;
+const PACKET_TOTAL_BYTES  = PACKET_HEADER_BYTES + N_BINS * 2;  // 178
+
+// ═══════════════════════════════════════════════
+//  BLE notify コールバック（Smart Cart 位置）
+// ═══════════════════════════════════════════════
+function handlePositionNotify(event) {
+  const data = event.target.value;
+
+  let rawChange = null;
+  let isOneShot = false;
+
+  if (data.byteLength >= 5 &&
+      data.getUint8(0) === 0xC0 &&
+      data.getUint8(1) === 0x00 &&
+      data.getUint8(2) === 0x05) {
+    // One-shot レスポンス（poll への応答）。seqNum を持たないため
+    // 後段の time-based dedup で二重発火を抑止する。
+    rawChange = data.getInt16(3, true);
+    isOneShot = true;
+  } else if (data.byteLength >= 3 && data.getUint8(0) <= 0x1F) {
+    // 周期データ（seqNum 0..0x1F）。重複は seqNum で確実に弾ける。
+    const seq = data.getUint8(0);
+    if (seq === lastPacketSeq) return;             // 完全重複
+    if (lastPacketSeq >= 0 && seq !== ((lastPacketSeq + 1) & 0x1F)) {
+      const lost = ((seq - lastPacketSeq - 1) + 32) & 0x1F;
+      console.warn(`[pos] seq gap: ${lastPacketSeq} -> ${seq} (${lost} pkt lost)`);
+    }
+    lastPacketSeq = seq;
+    rawChange = data.getInt16(1, true);
+    if (posAckChar) {
+      posAckChar.writeValueWithoutResponse(new Uint8Array([seq])).catch(() => {});
+    }
+  }
+
+  if (rawChange === null) return;
+
+  const now = performance.now();
+
+  // One-shot 0xC0 は seqNum を持たず、devRecv と char0003 から
+  // 同一パケットが二重に届いた場合に位置が二重加算される。
+  // 直前 notify から DUPLICATE_GUARD_MS 以内の one-shot は捨てる。
+  if (isOneShot && lastNotifyTime > 0 && (now - lastNotifyTime) < DUPLICATE_GUARD_MS) {
+    return;
+  }
+
+  countAccumulated += rawChange;
+  const newPos = countAccumulated * POS_SCALE;
+
+  // 速度: notify 到着時刻ベースの中央差分（≥20ms ガード）
+  if (lastNotifyTime > 0) {
+    const dt = (now - lastNotifyTime) / 1000;
+    if (dt >= 0.020) {
+      latestVelocity = (newPos - lastNotifyPos) / dt;
+      lastNotifyTime = now;
+      lastNotifyPos  = newPos;
+    }
+  } else {
+    lastNotifyTime = now;
+    lastNotifyPos  = newPos;
+  }
+  latestPosition = newPos;
+  notifyReceived = true;
+
+  // イベント駆動で記録（BLE 到着時刻を正確なタイムスタンプとして使用）
+  if (isRecording) {
+    const elapsed_s = (now - recordStartTime) / 1000;
+    posSession.push({ t_ms: now, elapsed_s, pos_m: newPos, vel_ms: latestVelocity });
+  }
+}
+
+// ═══════════════════════════════════════════════
+//  BLE notify コールバック（ESP32 周波数）
+// ═══════════════════════════════════════════════
+function onFreqNotify(event) {
+  // pos ポーリングを freq notify 到着に同期させる。
+  // setInterval(55ms) のタイマジッター(±20ms)を排除し、
+  // pos_t_s が freq_recv_t + BLE_RTT という一定オフセットに収束する。
+  // 録画中・表示中を問わず毎フレームリクエストを送る。
+  if (posCmdChar) {
+    posCmdChar.writeValueWithoutResponse(new Uint8Array([0x05, 0x02])).catch(() => {});
+  }
+
+  if (!isRecording) return;
+
+  const dv = event.target.value;  // DataView
+  if (!dv || dv.byteLength < PACKET_TOTAL_BYTES) {
+    log(`[freq] short packet: ${dv ? dv.byteLength : 0} B (expected ${PACKET_TOTAL_BYTES})`);
+    return;
+  }
+
+  const t_esp_s   = dv.getFloat32(0,  true);
+  const freq_hz   = dv.getFloat32(4,  true);
+  const amplitude = dv.getFloat32(8,  true);
+  const mag_scale = dv.getFloat32(12, true);
+
+  // mag_q[] は CSV 出力用に丸ごと保持（Uint16Array 81 点 = 162 B/フレーム）
+  const mag_q = new Uint16Array(N_BINS);
+  for (let b = 0; b < N_BINS; b++) {
+    mag_q[b] = dv.getUint16(PACKET_HEADER_BYTES + b * 2, true);
+  }
+
+  // ESP32 内部時刻を elapsed_s の基準に使う（BLEジッター排除）
+  if (firstFreqEspTime < 0) firstFreqEspTime = t_esp_s;
+  const elapsed_s = t_esp_s - firstFreqEspTime;
+
+  // t_true_ms: 初回受信時刻を基点に ESP32 内部時計で補外し BLE ジッターを排除
+  const t_recv_ms = performance.now();
+  if (firstFreqRecvMs < 0) firstFreqRecvMs = t_recv_ms;
+  const t_true_ms = firstFreqRecvMs + elapsed_s * 1000 - SAMPLING_TAIL_MS;
+
+  // パケットギャップ検出（ESP32 内部時刻の差分）
+  let gap_ok = true;
+  if (prevFreqEspTime >= 0) {
+    const gap_ms = (t_esp_s - prevFreqEspTime) * 1000;
+    if (gap_ms > FREQ_GAP_THRESHOLD_MS) {
+      gap_ok = false;
+      log(`[freq] gap: ${gap_ms.toFixed(0)} ms`);
+    }
+  }
+  prevFreqEspTime = t_esp_s;
+
+  freqSession.push({ t_true_ms, elapsed_s, freq_hz, gap_ok, amplitude, mag_scale, mag_q });
+
+  // 位置チャートを ESP32 タイムスタンプに同期して更新（表示用のみ・記録は handlePositionNotify で行う）
+  if (notifyReceived) {
+    posValues.push(latestPosition);
+    velValues.push(latestVelocity);
+    posTimeValues.push(elapsed_s);
+    const sliceV = velValues.slice(Math.max(0, velValues.length - VEL_SMOOTH_WIN));
+    velSmoothValues.push(sliceV.reduce((a, b) => a + b, 0) / sliceV.length);
+    if (posValues.length > MAX_POINTS) { posValues.shift(); velValues.shift(); velSmoothValues.shift(); posTimeValues.shift(); }
+    drawChart(ctxPos, posValues, '#0077cc', posTimeValues, document.getElementById('posAxisLabel'), 'm');
+    drawVelChart(ctxVel, velValues, velSmoothValues, posTimeValues, document.getElementById('velAxisLabel'));
+  }
+
+  // 振幅加重平均（トレーリング窓）
+  const freq_w = computeWeightedFreq(freqSession, freqSession.length - 1, FREQ_W_HALF_WIN);
+
+  // 表示用（freq < 0 は除外、かつ振幅フィルタ）
+  if (freq_hz > 0 && (amplitude === null || amplitude >= ampThreshold)) {
+    freqValues.push(freq_hz);
+    freqWValues.push(freq_w);
+    freqTimeValues.push(elapsed_s);
+    if (freqValues.length > MAX_POINTS) { freqValues.shift(); freqWValues.shift(); freqTimeValues.shift(); }
+    drawFreqChart(ctxFreq, freqValues, freqWValues, freqTimeValues,
+                  document.getElementById('freqAxisLabel'));
+  }
+
+  // 散布図をリアルタイム更新（5サンプルに1回）
+  if (freqSession.length % 5 === 0) drawScatter();
+
+  updateStats();
+}
+
+// ═══════════════════════════════════════════════
+//  55ms サンプラ（freq センサ未接続時のフォールバック）
+//  freq センサ接続中は onFreqNotify が pos ポーリングを担うため何もしない。
+//  freq センサ未接続（Cart のみ）の場合のみ setInterval でポーリングを継続する。
+// ═══════════════════════════════════════════════
+function sampleTick() {
+  if (isFreqConnected) return;  // freq 接続中は onFreqNotify に委譲
+  if (!isRecording) return;
+  if (posCmdChar) {
+    posCmdChar.writeValueWithoutResponse(new Uint8Array([0x05, 0x02])).catch(() => {});
+  }
+}
+
+// ═══════════════════════════════════════════════
+//  時間軸ヘルパー
+// ═══════════════════════════════════════════════
+function drawTimeAxis(ctx, times, PAD_L, PAD_T, plotW, plotH) {
+  if (!times || times.length < 2) return;
+  const tMin = times[0], tMax = times[times.length - 1];
+  if (tMax <= tMin) return;
+  const toX = t => PAD_L + (t - tMin) / (tMax - tMin) * plotW;
+
+  const span        = tMax - tMin;
+  const targetTicks = Math.max(6, Math.min(10, Math.floor(plotW / 120)));
+  const steps       = [0.2, 0.5, 1, 2, 5, 10, 20, 30, 60];
+  const step        = steps.find(s => span / s <= targetTicks) || 60;
+  const minorStep   = step >= 1 ? step / 2 : step;
+  const yBase       = PAD_T + plotH;
+
+  ctx.save();
+  ctx.font = '10px "Share Tech Mono",monospace';
+  ctx.textAlign = 'center';
+  ctx.lineWidth = 1;
+
+  if (minorStep < step) {
+    for (let s = Math.ceil(tMin / minorStep) * minorStep; s <= tMax + 1e-9; s += minorStep) {
+      if (Math.abs(Math.round(s / step) * step - s) < 1e-6) continue;
+      const x = toX(s);
+      ctx.strokeStyle = 'rgba(160,185,210,0.18)';
+      ctx.beginPath(); ctx.moveTo(x, PAD_T); ctx.lineTo(x, yBase); ctx.stroke();
+      ctx.strokeStyle = 'rgba(100,120,140,0.4)';
+      ctx.beginPath(); ctx.moveTo(x, yBase); ctx.lineTo(x, yBase + 3); ctx.stroke();
+    }
+  }
+  for (let s = Math.ceil(tMin / step) * step; s <= tMax + 1e-9; s += step) {
+    const x = toX(s);
+    ctx.strokeStyle = 'rgba(160,185,210,0.35)';
+    ctx.beginPath(); ctx.moveTo(x, PAD_T); ctx.lineTo(x, yBase); ctx.stroke();
+    ctx.strokeStyle = 'rgba(100,120,140,0.65)';
+    ctx.beginPath(); ctx.moveTo(x, yBase); ctx.lineTo(x, yBase + 5); ctx.stroke();
+    ctx.fillStyle = '#6b8099';
+    ctx.fillText(Number.isInteger(step) ? s.toFixed(0) : s.toFixed(1), x, yBase + 15);
+  }
+  ctx.strokeStyle = 'rgba(100,120,140,0.3)';
+  ctx.beginPath(); ctx.moveTo(PAD_L, yBase); ctx.lineTo(PAD_L + plotW, yBase); ctx.stroke();
+  ctx.restore();
+}
+
+// ═══════════════════════════════════════════════
+//  Canvas 描画
+// ═══════════════════════════════════════════════
+const ctxPos     = document.getElementById('chartPos').getContext('2d');
+const ctxVel     = document.getElementById('chartVel').getContext('2d');
+const ctxFreq    = document.getElementById('chartFreq').getContext('2d');
+const ctxScatter = document.getElementById('chartScatter').getContext('2d');
+
+function drawChart(ctx, data, color, times, labelEl, unit) {
+  const W = ctx.canvas.width, H = ctx.canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#f8fbff';
+  ctx.fillRect(0, 0, W, H);
+  if (data.length < 2) return;
+
+  const PAD_L = 62, PAD_R = 12, PAD_T = 12, PAD_B = 34;
+  const plotW = W - PAD_L - PAD_R;
+  const plotH = H - PAD_T - PAD_B;
+
+  let min = Math.min(...data), max = Math.max(...data);
+  if (Math.abs(max - min) < 0.001) { min -= 0.1; max += 0.1; }
+  const range = max - min;
+
+  const toY = v => PAD_T + plotH - ((v - min) / range) * plotH;
+  const useTimes = times && times.length === data.length && times[times.length - 1] > times[0];
+  const tMin = useTimes ? times[0] : 0, tMax = useTimes ? times[times.length - 1] : data.length - 1;
+  const toX = i => PAD_L + ((useTimes ? times[i] : i) - tMin) / (tMax - tMin) * plotW;
+
+  // グリッド（水平 5 本）
+  ctx.strokeStyle = 'rgba(160,185,210,0.5)';
+  ctx.lineWidth = 1;
+  for (let k = 0; k <= 4; k++) {
+    const y   = PAD_T + (k / 4) * plotH;
+    const val = max - (k / 4) * range;
+    ctx.beginPath(); ctx.moveTo(PAD_L, y); ctx.lineTo(PAD_L + plotW, y); ctx.stroke();
+    ctx.fillStyle = '#6b8099';
+    ctx.font      = '10px "Share Tech Mono", monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(val.toFixed(unit === 'Hz' ? 1 : 3), PAD_L - 6, y + 4);
+  }
+
+  // ゼロ線
+  if (min < 0 && max > 0) {
+    const y0 = toY(0);
+    ctx.strokeStyle = 'rgba(100,120,140,0.7)';
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath(); ctx.moveTo(PAD_L, y0); ctx.lineTo(PAD_L + plotW, y0); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // データ線
+  ctx.strokeStyle = color;
+  ctx.lineWidth   = 2;
+  ctx.beginPath();
+  for (let i = 0; i < data.length; i++) {
+    i === 0 ? ctx.moveTo(toX(i), toY(data[i])) : ctx.lineTo(toX(i), toY(data[i]));
+  }
+  ctx.stroke();
+
+  // 最新値マーカー
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.arc(toX(data.length - 1), toY(data[data.length - 1]), 4, 0, Math.PI * 2);
+  ctx.fill();
+
+  if (useTimes) drawTimeAxis(ctx, times, PAD_L, PAD_T, plotW, plotH);
+
+  if (labelEl) {
+    const dec = unit === 'Hz' ? 2 : 3;
+    labelEl.textContent =
+      `min ${min.toFixed(dec)} / max ${max.toFixed(dec)} ${unit}`;
+  }
+}
+
+// ═══════════════════════════════════════════════
+//  速度チャート（raw = 薄線、5点平均 = 主線）
+// ═══════════════════════════════════════════════
+function drawVelChart(ctx, rawData, smoothData, times, labelEl) {
+  const W = ctx.canvas.width, H = ctx.canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#f8fbff';
+  ctx.fillRect(0, 0, W, H);
+  if (rawData.length < 2) return;
+
+  const PAD_L = 62, PAD_R = 12, PAD_T = 12, PAD_B = 34;
+  const plotW = W - PAD_L - PAD_R, plotH = H - PAD_T - PAD_B;
+  const all = rawData.concat(smoothData);
+  let min = Math.min(...all), max = Math.max(...all);
+  if (Math.abs(max - min) < 0.001) { min -= 0.1; max += 0.1; }
+  const range = max - min;
+  const toY = v => PAD_T + plotH - ((v - min) / range) * plotH;
+  const useTimes = times && times.length === rawData.length && times[times.length - 1] > times[0];
+  const tMin = useTimes ? times[0] : 0, tMax = useTimes ? times[times.length - 1] : rawData.length - 1;
+  const toX = i => PAD_L + ((useTimes ? times[i] : i) - tMin) / (tMax - tMin) * plotW;
+
+  // グリッド
+  ctx.strokeStyle = 'rgba(160,185,210,0.5)'; ctx.lineWidth = 1;
+  for (let k = 0; k <= 4; k++) {
+    const y = PAD_T + (k / 4) * plotH;
+    ctx.beginPath(); ctx.moveTo(PAD_L, y); ctx.lineTo(PAD_L + plotW, y); ctx.stroke();
+    ctx.fillStyle = '#6b8099'; ctx.font = '10px "Share Tech Mono",monospace'; ctx.textAlign = 'right';
+    ctx.fillText((max - (k / 4) * range).toFixed(3), PAD_L - 6, y + 4);
+  }
+  // ゼロ線
+  if (min < 0 && max > 0) {
+    const y0 = toY(0);
+    ctx.strokeStyle = 'rgba(100,120,140,0.7)'; ctx.setLineDash([4, 3]);
+    ctx.beginPath(); ctx.moveTo(PAD_L, y0); ctx.lineTo(PAD_L + plotW, y0); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  // raw（薄い細線）
+  ctx.strokeStyle = 'rgba(74,140,0,0.25)'; ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  for (let i = 0; i < rawData.length; i++)
+    i === 0 ? ctx.moveTo(toX(i), toY(rawData[i])) : ctx.lineTo(toX(i), toY(rawData[i]));
+  ctx.stroke();
+  // smoothed（主線）
+  if (smoothData.length >= 2) {
+    ctx.strokeStyle = '#4a8c00'; ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let i = 0; i < smoothData.length; i++)
+      i === 0 ? ctx.moveTo(toX(i), toY(smoothData[i])) : ctx.lineTo(toX(i), toY(smoothData[i]));
+    ctx.stroke();
+    ctx.fillStyle = '#4a8c00';
+    ctx.beginPath(); ctx.arc(toX(smoothData.length-1), toY(smoothData[smoothData.length-1]), 4, 0, Math.PI*2); ctx.fill();
+  }
+  if (useTimes) drawTimeAxis(ctx, times, PAD_L, PAD_T, plotW, plotH);
+  if (labelEl) {
+    const vLast = smoothData.length > 0 ? smoothData[smoothData.length-1] : rawData[rawData.length-1];
+    labelEl.textContent = `last(avg) ${vLast.toFixed(3)} m/s  |  min ${min.toFixed(3)} / max ${max.toFixed(3)} m/s`;
+  }
+}
+
+// ═══════════════════════════════════════════════
+//  周波数チャート（raw = 薄線、振幅加重平均 = 主線）
+// ═══════════════════════════════════════════════
+function drawFreqChart(ctx, rawData, wData, times, labelEl) {
+  const W = ctx.canvas.width, H = ctx.canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#f8fbff';
+  ctx.fillRect(0, 0, W, H);
+  if (rawData.length < 2) return;
+
+  const PAD_L = 62, PAD_R = 12, PAD_T = 12, PAD_B = 34;
+  const plotW = W - PAD_L - PAD_R, plotH = H - PAD_T - PAD_B;
+  const validRaw = rawData.filter(v => v > 0);
+  const validW   = wData.filter(v => v > 0);
+  const all = validRaw.concat(validW);
+  if (all.length === 0) return;
+  let min = Math.min(...all), max = Math.max(...all);
+  if (Math.abs(max - min) < 0.5) { min -= 1; max += 1; }
+  const range = max - min;
+  const toY = v => PAD_T + plotH - ((v - min) / range) * plotH;
+  const useTimes = times && times.length === rawData.length && times[times.length - 1] > times[0];
+  const tMin = useTimes ? times[0] : 0, tMax = useTimes ? times[times.length - 1] : rawData.length - 1;
+  const toX = i => PAD_L + ((useTimes ? times[i] : i) - tMin) / (tMax - tMin) * plotW;
+
+  // グリッド
+  ctx.strokeStyle = 'rgba(160,185,210,0.5)'; ctx.lineWidth = 1;
+  for (let k = 0; k <= 4; k++) {
+    const y = PAD_T + (k / 4) * plotH;
+    ctx.beginPath(); ctx.moveTo(PAD_L, y); ctx.lineTo(PAD_L + plotW, y); ctx.stroke();
+    ctx.fillStyle = '#6b8099'; ctx.font = '10px "Share Tech Mono",monospace'; ctx.textAlign = 'right';
+    ctx.fillText((max - (k / 4) * range).toFixed(2), PAD_L - 6, y + 4);
+  }
+  // raw（薄い細線、freq<0は不連続）
+  ctx.strokeStyle = 'rgba(204,102,0,0.25)'; ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  let started = false;
+  for (let i = 0; i < rawData.length; i++) {
+    if (rawData[i] <= 0) { started = false; continue; }
+    started ? ctx.lineTo(toX(i), toY(rawData[i])) : ctx.moveTo(toX(i), toY(rawData[i]));
+    started = true;
+  }
+  ctx.stroke();
+  // 加重平均（主線、freq_w<0は不連続）
+  if (wData.length >= 2) {
+    ctx.strokeStyle = '#cc6600'; ctx.lineWidth = 2;
+    ctx.beginPath();
+    started = false;
+    for (let i = 0; i < wData.length; i++) {
+      if (wData[i] <= 0) { started = false; continue; }
+      started ? ctx.lineTo(toX(i), toY(wData[i])) : ctx.moveTo(toX(i), toY(wData[i]));
+      started = true;
+    }
+    ctx.stroke();
+    const lastValid = [...wData].reverse().find(v => v > 0);
+    const lastIdx   = wData.length - 1 - [...wData].reverse().findIndex(v => v > 0);
+    if (lastValid > 0) {
+      ctx.fillStyle = '#cc6600';
+      ctx.beginPath(); ctx.arc(toX(lastIdx), toY(lastValid), 4, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+  if (useTimes) drawTimeAxis(ctx, times, PAD_L, PAD_T, plotW, plotH);
+  if (labelEl) {
+    const wLast = [...wData].reverse().find(v => v > 0) ?? 0;
+    labelEl.textContent = `last(w-avg) ${wLast.toFixed(2)} Hz  |  min ${min.toFixed(2)} / max ${max.toFixed(2)} Hz`;
+  }
+}
+
+// ═══════════════════════════════════════════════
+//  振幅加重平均周波数
+//  centerIdx の ±halfWin フレームを amplitude² で加重平均
+//  freq_hz < 0 のフレームは除外（重み0）
+// ═══════════════════════════════════════════════
+function computeWeightedFreq(session, centerIdx, halfWin) {
+  const lo = Math.max(0, centerIdx - halfWin);
+  const hi = Math.min(session.length - 1, centerIdx + halfWin);
+  let wSum = 0, fwSum = 0;
+  for (let j = lo; j <= hi; j++) {
+    const f = session[j];
+    if (f.freq_hz < 0 || f.amplitude == null) continue;
+    if (f.freq_hz <= GOERTZEL_FREQ_LOW || f.freq_hz >= GOERTZEL_FREQ_HIGH) continue; // 境界ヒット除外
+    const w = f.amplitude * f.amplitude;
+    wSum  += w;
+    fwSum += w * f.freq_hz;
+  }
+  return wSum > 0 ? fwSum / wSum : -1;
+}
+
+// ═══════════════════════════════════════════════
+//  表示用周波数バッファ再構築（ampThreshold 変更時に呼ぶ）
+// ═══════════════════════════════════════════════
+function rebuildFreqBuffers() {
+  const filteredIdx = freqSession.reduce((acc, f, i) => {
+    if (f.freq_hz > 0 && (f.amplitude ?? 0) >= ampThreshold) acc.push(i);
+    return acc;
+  }, []).slice(-MAX_POINTS);
+  freqValues     = filteredIdx.map(i => freqSession[i].freq_hz);
+  freqWValues    = filteredIdx.map(i => computeWeightedFreq(freqSession, i, FREQ_W_HALF_WIN));
+  freqTimeValues = filteredIdx.map(i => freqSession[i].elapsed_s);
+}
+
+// ═══════════════════════════════════════════════
+//  振幅閾値の自動算出（停止後、autoモード時のみ）
+//  静止区間の amplitude 中央値 × 0.3 を閾値として適用する
+// ═══════════════════════════════════════════════
+function computeDynamicAmpThreshold() {
+  if (!ampThresholdIsAuto) return;
+  if (posSession.length === 0) return;
+
+  const stationaryAmps = freqSession
+    .filter(f => f.freq_hz > 0 && f.amplitude != null)
+    .map(f => {
+      const p = interpolatePos(f.t_true_ms);
+      return (p && Math.abs(p.vel_ms) < 0.08) ? f.amplitude : null;
+    })
+    .filter(v => v !== null)
+    .sort((a, b) => a - b);
+
+  if (stationaryAmps.length < 3) return;
+
+  const medianAmp = stationaryAmps[Math.floor(stationaryAmps.length / 2)];
+  const newThresh = Math.max(50, Math.min(500, Math.round(medianAmp * 0.3)));
+  if (newThresh === ampThreshold) return;
+
+  ampThreshold = newThresh;
+  const slider = document.getElementById('ampSlider');
+  slider.value = ampThreshold;
+  document.getElementById('ampSliderVal').textContent = ampThreshold;
+  rebuildFreqBuffers();
+  drawFreqChart(ctxFreq, freqValues, freqWValues, freqTimeValues,
+                document.getElementById('freqAxisLabel'));
+}
+
+// ═══════════════════════════════════════════════
+//  f₀ 推定（静止時周波数の中央値）
+// ═══════════════════════════════════════════════
+function computeFRef() {
+  const stationaryFreqs = freqSession
+    .filter(f => f.freq_hz > 0 && (f.amplitude ?? 0) >= ampThreshold)
+    .map(f => {
+      const p = interpolatePos(f.t_true_ms);
+      return p && Math.abs(p.vel_ms) < 0.08 ? f.freq_hz : null;
+    })
+    .filter(v => v !== null);
+  if (stationaryFreqs.length >= 3) {
+    stationaryFreqs.sort((a, b) => a - b);
+    return stationaryFreqs[Math.floor(stationaryFreqs.length / 2)];
+  }
+  // フォールバック: 有効 freq 全体の中央値（静止区間が確保できない場合）
+  const allFreqs = freqSession
+    .filter(f => f.freq_hz > 0 && (f.amplitude ?? 0) >= ampThreshold)
+    .map(f => f.freq_hz);
+  if (allFreqs.length >= 3) {
+    allFreqs.sort((a, b) => a - b);
+    return allFreqs[Math.floor(allFreqs.length / 2)];
+  }
+  return 1997.0;
+}
+
+// ═══════════════════════════════════════════════
+//  散布図（v vs. Δf）描画
+// ═══════════════════════════════════════════════
+function drawScatter() {
+  if (!ctxScatter) return;
+  const W = ctxScatter.canvas.width, H = ctxScatter.canvas.height;
+  ctxScatter.clearRect(0, 0, W, H);
+  ctxScatter.fillStyle = '#f8fbff';
+  ctxScatter.fillRect(0, 0, W, H);
+
+  const PAD_L = 62, PAD_R = 20, PAD_T = 16, PAD_B = 36;
+  const plotW = W - PAD_L - PAD_R, plotH = H - PAD_T - PAD_B;
+
+  const V_MAX = 3.5, DF_MAX = 20;
+  const toX = v  => PAD_L + (v + V_MAX) / (2 * V_MAX) * plotW;
+  const toY = df => PAD_T + plotH - (df + DF_MAX) / (2 * DF_MAX) * plotH;
+
+  // グリッド
+  ctxScatter.strokeStyle = 'rgba(160,185,210,0.45)'; ctxScatter.lineWidth = 1;
+  const vTicks  = [-3,-2,-1,0,1,2,3];
+  const dfTicks = [-16,-8,0,8,16];
+  vTicks.forEach(v => {
+    const x = toX(v);
+    ctxScatter.beginPath(); ctxScatter.moveTo(x, PAD_T); ctxScatter.lineTo(x, PAD_T+plotH); ctxScatter.stroke();
+    ctxScatter.fillStyle='#6b8099'; ctxScatter.font='10px "Share Tech Mono",monospace'; ctxScatter.textAlign='center';
+    ctxScatter.fillText(v.toFixed(0), x, PAD_T+plotH+14);
+  });
+  dfTicks.forEach(df => {
+    const y = toY(df);
+    ctxScatter.beginPath(); ctxScatter.moveTo(PAD_L, y); ctxScatter.lineTo(PAD_L+plotW, y); ctxScatter.stroke();
+    ctxScatter.fillStyle='#6b8099'; ctxScatter.font='10px "Share Tech Mono",monospace'; ctxScatter.textAlign='right';
+    ctxScatter.fillText(df.toFixed(0), PAD_L-6, y+4);
+  });
+  // 軸ラベル
+  ctxScatter.fillStyle='#6b8099'; ctxScatter.font='11px "Exo 2",sans-serif'; ctxScatter.textAlign='center';
+  ctxScatter.fillText('velocity  v  (m/s)', PAD_L + plotW/2, PAD_T+plotH+28);
+  ctxScatter.save(); ctxScatter.translate(14, PAD_T+plotH/2); ctxScatter.rotate(-Math.PI/2);
+  ctxScatter.fillText('Δf (Hz)', 0, 0); ctxScatter.restore();
+
+  // ゼロ軸
+  ctxScatter.strokeStyle='rgba(100,120,140,0.8)'; ctxScatter.setLineDash([4,3]); ctxScatter.lineWidth=1;
+  ctxScatter.beginPath(); ctxScatter.moveTo(toX(0),PAD_T); ctxScatter.lineTo(toX(0),PAD_T+plotH); ctxScatter.stroke();
+  ctxScatter.beginPath(); ctxScatter.moveTo(PAD_L,toY(0)); ctxScatter.lineTo(PAD_L+plotW,toY(0)); ctxScatter.stroke();
+  ctxScatter.setLineDash([]);
+
+  // 理論曲線
+  const fRef = computeFRef();
+  const VS = 343.0;
+  ctxScatter.strokeStyle = '#222'; ctxScatter.lineWidth = 2;
+  ctxScatter.beginPath();
+  let first = true;
+  for (let i = -350; i <= 350; i++) {
+    const v = i * V_MAX / 350;
+    const df = fRef * v / (VS - v);
+    if (Math.abs(df) > DF_MAX * 1.1) { first = true; continue; }
+    const x = toX(v), y = toY(df);
+    first ? ctxScatter.moveTo(x, y) : ctxScatter.lineTo(x, y);
+    first = false;
+  }
+  ctxScatter.stroke();
+
+  // データ点（pos 側 t_ms ベースの central diff を使用）
+  // samplingTailAdjMs が適用されている場合は補正済み時刻で pos をマッチング
+  const HALF_WIN = CSV_VEL_HALF_WIN;
+  const n = freqSession.length;
+  let nShown = 0;
+  for (let i = 0; i < n; i++) {
+    const f = freqSession[i];
+    if (f.freq_hz <= 0) continue;
+    const ip = interpolatePos(f.t_true_ms + samplingTailAdjMs, HALF_WIN);
+    if (!ip || ip.vel_ms === null) continue;
+    const v = ip.vel_ms;
+    if (Math.abs(v) > 5) continue;  // エンコーダー異常除外
+    const fw = computeWeightedFreq(freqSession, i, FREQ_W_HALF_WIN);
+    if (fw <= 0) continue;          // 有効な加重平均がない窓は除外
+    const df = fw - fRef;           // 散布図は freq_w_hz ベース
+    const amp = f.amplitude ?? 0;
+    const x = toX(v), y = toY(df);
+    if (x < PAD_L || x > PAD_L+plotW || y < PAD_T || y > PAD_T+plotH) continue;
+    const aboveThresh = amp >= ampThreshold;
+    ctxScatter.beginPath();
+    ctxScatter.arc(x, y, aboveThresh ? 5 : 3, 0, Math.PI*2);
+    if (!aboveThresh) {
+      ctxScatter.fillStyle = 'rgba(160,160,160,0.25)';  // 閾値未満は薄いグレー（gap_ok 問わず）
+    } else if (!f.gap_ok) {
+      ctxScatter.fillStyle = 'rgba(200,0,0,0.6)';       // 閾値以上かつ gap_ok=false は赤
+    } else {
+      ctxScatter.fillStyle = 'rgba(204,102,0,0.75)';
+    }
+    ctxScatter.fill();
+    if (aboveThresh) nShown++;
+  }
+
+  // 凡例
+  ctxScatter.font = '10px "Share Tech Mono",monospace'; ctxScatter.textAlign='left';
+  ctxScatter.fillStyle='#222';
+  ctxScatter.fillText(`Theory: Δf = f₀·v/(vₛ−v)  f₀=${fRef.toFixed(1)} Hz  vₛ=343 m/s`, PAD_L+6, PAD_T+14);
+  const infoEl = document.getElementById('scatterInfo');
+  if (infoEl) infoEl.textContent = `amp≥${ampThreshold}: ${nShown} pts / total: ${n}`;
+}
+
+// ═══════════════════════════════════════════════
+//  統計表示
+// ═══════════════════════════════════════════════
+function updateStats() {
+  if (posSession.length > 0) {
+    const last = posSession[posSession.length - 1];
+    document.getElementById('sPosLast').textContent = last.pos_m.toFixed(4)  + ' m';
+    const vSmooth = velSmoothValues.length > 0 ? velSmoothValues[velSmoothValues.length-1] : last.vel_ms;
+    document.getElementById('sVelLast').textContent = vSmooth.toFixed(3) + ' m/s';
+  }
+  const validFreqs = freqSession.filter(f => f.freq_hz > 0 && (f.amplitude ?? 0) >= ampThreshold);
+  if (validFreqs.length > 0) {
+    const fw = computeWeightedFreq(freqSession, freqSession.length - 1, FREQ_W_HALF_WIN);
+    const lastF = validFreqs[validFreqs.length - 1];
+    document.getElementById('sFreqLast').textContent =
+      (fw > 0 ? fw.toFixed(2) : lastF.freq_hz.toFixed(2)) + ' Hz';
+  }
+  const fRef = computeFRef();
+  const lastAmp = freqSession.length > 0 ? (freqSession[freqSession.length-1].amplitude ?? 0) : 0;
+  document.getElementById('sFRefAmp').textContent =
+    `${fRef.toFixed(2)} Hz  /  ${lastAmp.toFixed(0)}`;
+}
+
+// ═══════════════════════════════════════════════
+//  診断ログ
+// ═══════════════════════════════════════════════
+function log(msg) {
+  console.log(msg);
+  const el = document.getElementById('diagLog');
+  if (el) { el.textContent += msg + '\n'; el.scrollTop = el.scrollHeight; }
+}
+
+// ═══════════════════════════════════════════════
+//  BLE 接続 — Smart Cart
+// ═══════════════════════════════════════════════
+async function connectSmartCart() {
+  try {
+    setCartStatus('SCANNING...');
+    const diagEl = document.getElementById('diagLog');
+    if (diagEl) diagEl.textContent = '';
+    log('Requesting Smart Cart ...');
+    cartDevice = await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: 'Smart Cart' }],
+      optionalServices: ALL_PASCO_UUIDS
+    });
+    log(`Device: ${cartDevice.name}`);
+    cartDevice.addEventListener('gattserverdisconnected', onCartDisconnected);
+
+    const server = await cartDevice.gatt.connect();
+    log('GATT connected.');
+
+    const posSvc = await server.getPrimaryService(POSITION_SERVICE);
+    const chars  = await posSvc.getCharacteristics();
+    log(`Position service: ${chars.length} char(s)`);
+
+    const devSvc  = await server.getPrimaryService(DEVICE_SERVICE);
+    const devCmd  = await devSvc.getCharacteristic(DEVICE_CMD_CHAR);
+    const devRecv = await devSvc.getCharacteristic('4a5c0000-0003-0000-0000-5c1e741f1c00');
+    await devRecv.startNotifications();
+    devRecv.addEventListener('characteristicvaluechanged', (e) => {
+      const b = Array.from(new Uint8Array(e.target.value.buffer))
+        .map(x => x.toString(16).padStart(2,'0')).join(' ');
+      log(`[dev recv] ${b}`);
+      handlePositionNotify(e);
+    });
+
+    await devCmd.writeValueWithoutResponse(new Uint8Array([0x37, 0x01, 0x00]));
+    log('Sent WIRELESS_RMS_START.');
+    await new Promise(r => setTimeout(r, 300));
+
+    posCmdChar = await posSvc.getCharacteristic(POSITION_CMD_CHAR);
+    posAckChar = await posSvc.getCharacteristic(POSITION_ACK_CHAR);
+
+    const char0003 = await posSvc.getCharacteristic('4a5c0003-0003-0000-0000-5c1e741f1c00');
+    await char0003.startNotifications();
+    char0003.addEventListener('characteristicvaluechanged', (e) => {
+      const b = Array.from(new Uint8Array(e.target.value.buffer))
+        .map(x => x.toString(16).padStart(2,'0')).join(' ');
+      log(`[pos 0003] ${b}`);
+      handlePositionNotify(e);
+    });
+
+    await posCmdChar.writeValueWithoutResponse(new Uint8Array([0x05, 0x02]));
+    log('Test request sent.');
+
+    isCartConnected = true;
+    setCartStatus('CONNECTED: ' + cartDevice.name, true);
+    updateButtonStates();
+  } catch (e) {
+    console.error(e);
+    log('Cart ERROR: ' + e.message);
+    setCartStatus('ERROR');
+  }
+}
+
+function onCartDisconnected() {
+  isCartConnected = false;
+  setCartStatus('DISCONNECTED');
+  stopRecording();
+  updateButtonStates();
+}
+
+function setCartStatus(text, connected = false) {
+  document.getElementById('cartBadge').className =
+    'status-badge' + (connected ? ' connected' : '');
+  document.getElementById('cartText').textContent = 'CART: ' + text;
+}
+
+// ═══════════════════════════════════════════════
+//  BLE 接続 — Freq Sensor (ESP32)
+// ═══════════════════════════════════════════════
+async function connectFreqSensor() {
+  try {
+    setFreqStatus('SCANNING...');
+    log('Requesting Freq Sensor ...');
+    freqDevice = await navigator.bluetooth.requestDevice({
+      filters: [{ services: ['environmental_sensing'] }]
+    });
+    log(`Freq device: ${freqDevice.name}`);
+    freqDevice.addEventListener('gattserverdisconnected', onFreqDisconnected);
+
+    const server  = await freqDevice.gatt.connect();
+    const service = await server.getPrimaryService('environmental_sensing');
+    freqChar      = await service.getCharacteristic('analog');
+    await freqChar.startNotifications();
+    freqChar.addEventListener('characteristicvaluechanged', onFreqNotify);
+    log('Freq sensor ready.');
+
+    isFreqConnected = true;
+    setFreqStatus('CONNECTED: ' + freqDevice.name, true);
+    updateButtonStates();
+  } catch (e) {
+    console.error(e);
+    log('Freq ERROR: ' + e.message);
+    setFreqStatus('ERROR');
+  }
+}
+
+function onFreqDisconnected() {
+  isFreqConnected  = false;
+  firstFreqRecvMs  = -1;
+  setFreqStatus('DISCONNECTED');
+  updateButtonStates();
+}
+
+function setFreqStatus(text, connected = false) {
+  document.getElementById('freqBadge').className =
+    'status-badge' + (connected ? ' connected' : '');
+  document.getElementById('freqText').textContent = 'FREQ: ' + text;
+}
+
+// ═══════════════════════════════════════════════
+//  ボタン状態管理
+// ═══════════════════════════════════════════════
+function updateButtonStates() {
+  const anyConnected = isCartConnected || isFreqConnected;
+  document.getElementById('btnStart').disabled = !anyConnected || isRecording;
+  document.getElementById('btnStop').disabled  = !isRecording;
+  document.getElementById('btnReset').disabled = !anyConnected;
+}
+
+// ═══════════════════════════════════════════════
+//  SAMPLING_TAIL_MS 実測校正
+//
+//  τ を ±80 ms の範囲で 2 ms 刻みにスキャンし、
+//    nearestPosIdx(f.t_true_ms + τ)
+//  で freq フレームと pos サンプルを対応付けて Doppler 線形フィット (v vs Δf) を実行。
+//  R² が最大になる τ_opt が freq-pos の時刻ずれ推定値。
+//
+//  補正後の有効 SAMPLING_TAIL = const SAMPLING_TAIL_MS(37) − τ_opt
+//  「Apply」を押すと samplingTailAdjMs ← τ_opt が設定され、
+//  drawScatter / buildCsv の pos マッチングと freq_t_s 列に反映される。
+// ═══════════════════════════════════════════════
+function calibrateSamplingTail() {
+  if (freqSession.length < 20 || posSession.length < 20) return null;
+  const f0 = computeFRef();
+  if (f0 <= 0) return null;
+  const HALF = CSV_VEL_HALF_WIN;
+
+  let bestTau = 0, bestR2 = -1, bestSlope = 0;
+  let curR2 = 0,   curSlope = 0;
+
+  for (let tau = -80; tau <= 80; tau += 2) {
+    let sumX=0, sumY=0, sumXX=0, sumXY=0, sumYY=0, nPts=0;
+
+    for (let i = 0; i < freqSession.length; i++) {
+      const f = freqSession[i];
+      if (f.freq_hz <= 0 || (f.amplitude ?? 0) < 300) continue;
+      // τ だけシフトした時刻で pos を探す
+      const k = nearestPosIdx(f.t_true_ms + tau);
+      if (k < 0) continue;
+      const v = posCentralDiffVel(k, HALF);
+      if (v === null || Math.abs(v) < 0.02 || Math.abs(v) > 2.5) continue;
+      const fw = computeWeightedFreq(freqSession, i, FREQ_W_HALF_WIN);
+      if (fw <= 0) continue;
+      const df = fw - f0;
+      sumX += v; sumY += df; sumXX += v*v; sumXY += v*df; sumYY += df*df; nPts++;
+    }
+
+    if (nPts < 10) continue;
+    const dXX = nPts*sumXX - sumX*sumX;
+    const dYY = nPts*sumYY - sumY*sumY;
+    const dXY = nPts*sumXY - sumX*sumY;
+    const r2    = (dXX > 0 && dYY > 0) ? dXY*dXY / (dXX*dYY) : 0;
+    const slope = dXX > 0 ? dXY / dXX : 0;
+
+    if (tau === 0) { curR2 = r2; curSlope = slope; }
+    if (r2 > bestR2) { bestR2 = r2; bestTau = tau; bestSlope = slope; }
+  }
+
+  return {
+    tauOpt:        bestTau,
+    suggestedTail: SAMPLING_TAIL_MS - bestTau,
+    r2Before:      curR2,
+    r2After:       bestR2,
+    slopeBefore:   curSlope,
+    slopeAfter:    bestSlope,
+    theory:        f0 / 343.0,
+  };
+}
+
+function showCalibResult(cal) {
+  document.getElementById('calTau').textContent =
+    (cal.tauOpt >= 0 ? '+' : '') + cal.tauOpt;
+  document.getElementById('calTail').textContent  = cal.suggestedTail;
+  document.getElementById('calR2Before').textContent  = cal.r2Before.toFixed(4);
+  document.getElementById('calR2After').textContent   = cal.r2After.toFixed(4);
+  document.getElementById('calRatioBefore').textContent =
+    (cal.slopeBefore / cal.theory).toFixed(4);
+  document.getElementById('calRatioAfter').textContent  =
+    (cal.slopeAfter  / cal.theory).toFixed(4);
+  document.getElementById('calApplied').style.display = 'none';
+  document.getElementById('calibPanel').style.display = 'block';
+}
+
+// ═══════════════════════════════════════════════
+//  録画開始 / 停止 / リセット
+// ═══════════════════════════════════════════════
+function startRecording() {
+  isRecording     = true;
+  recordStartTime = performance.now();
+  notifyReceived  = false;
+  latestVelocity  = 0;
+  lastNotifyTime  = 0;
+  lastNotifyPos   = 0;
+  prevFreqEspTime  = -1;
+  firstFreqEspTime = -1;
+  firstFreqRecvMs  = -1;
+  ampThresholdIsAuto = true;  // 録画開始でオートモードに戻す
+  samplerTimerId   = setInterval(sampleTick, SAMPLE_INTERVAL_MS);
+  updateButtonStates();
+}
+
+function stopRecording() {
+  isRecording = false;
+  if (samplerTimerId) { clearInterval(samplerTimerId); samplerTimerId = null; }
+  const hasData = posSession.length > 0 || freqSession.length > 0;
+  document.getElementById('btnCsv').disabled = !hasData;
+  updateButtonStates();
+  computeDynamicAmpThreshold();  // 静止振幅から閾値を自動算出（autoモード時のみ）
+  drawScatter();  // 停止後に全データで散布図を確定描画
+
+  // SAMPLING_TAIL 校正を自動実行して結果パネルを表示
+  if (freqSession.length >= 20 && posSession.length >= 20) {
+    const cal = calibrateSamplingTail();
+    if (cal) showCalibResult(cal);
+  }
+}
+
+function resetAll() {
+  stopRecording();
+  countAccumulated = 0; lastPacketSeq = -1;
+  latestPosition = 0; notifyReceived = false;
+  latestVelocity = 0; lastNotifyTime = 0; lastNotifyPos = 0;
+  ampThreshold = 100; ampThresholdIsAuto = true;
+  document.getElementById('ampSlider').value = 100;
+  document.getElementById('ampSliderVal').textContent = '100';
+  prevFreqEspTime  = -1;
+  firstFreqEspTime = -1;
+  firstFreqRecvMs  = -1;
+  posSession = []; freqSession = [];
+  posValues = []; velValues = []; velSmoothValues = []; freqValues = []; freqWValues = [];
+  posTimeValues = []; freqTimeValues = [];
+  ['sPosLast','sVelLast','sFreqLast','sFRefAmp'].forEach(id => {
+    document.getElementById(id).textContent = '—';
+  });
+  ['posAxisLabel','velAxisLabel','freqAxisLabel','scatterInfo'].forEach(id => {
+    document.getElementById(id).textContent = '';
+  });
+  document.getElementById('btnCsv').disabled = true;
+  [ctxPos, ctxVel, ctxFreq, ctxScatter].forEach(ctx => {
+    if (ctx) ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+  });
+  // 校正状態をリセット
+  samplingTailAdjMs = 0;
+  document.getElementById('calibPanel').style.display  = 'none';
+  document.getElementById('calApplied').style.display  = 'none';
+}
+
+// posSession の t_ms を二分探索し、前後 2 点で線形補間する。
+// pos_m : 位置を線形補間。
+// vel_ms: posCentralDiffVel を前後インデックスで線形補間（halfWin=0 なら隣接差分速度を補間）。
+// t_ms_nearest: CSV 診断用・最近傍サンプルのタイムスタンプ。
+function interpolatePos(t_ms, halfWin) {
+  const n = posSession.length;
+  if (n === 0) return null;
+  if (t_ms <= posSession[0].t_ms) {
+    const v = halfWin > 0 ? posCentralDiffVel(0, halfWin) : posSession[0].vel_ms;
+    return { pos_m: posSession[0].pos_m, vel_ms: v, t_ms_nearest: posSession[0].t_ms };
+  }
+  const last = posSession[n - 1];
+  if (t_ms >= last.t_ms) {
+    const v = halfWin > 0 ? posCentralDiffVel(n - 1, halfWin) : last.vel_ms;
+    return { pos_m: last.pos_m, vel_ms: v, t_ms_nearest: last.t_ms };
+  }
+  let lo = 0, hi = n - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (posSession[mid].t_ms <= t_ms) lo = mid; else hi = mid;
+  }
+  const p0 = posSession[lo], p1 = posSession[hi];
+  const dt  = p1.t_ms - p0.t_ms;
+  const alpha = dt > 0 ? (t_ms - p0.t_ms) / dt : 0;
+  const pos_m = p0.pos_m + alpha * (p1.pos_m - p0.pos_m);
+  let vel_ms;
+  if (halfWin > 0) {
+    const v0 = posCentralDiffVel(lo, halfWin);
+    const v1 = posCentralDiffVel(hi, halfWin);
+    vel_ms = (v0 !== null && v1 !== null) ? v0 + alpha * (v1 - v0)
+           : (v0 !== null ? v0 : v1);
+  } else {
+    vel_ms = p0.vel_ms + alpha * (p1.vel_ms - p0.vel_ms);
+  }
+  return { pos_m, vel_ms, t_ms_nearest: alpha <= 0.5 ? p0.t_ms : p1.t_ms };
+}
+
+// calibrateSamplingTail 専用: posSession で t_ms に最も近いサンプルの index を返す。
+// τ スキャンでは離散的なインデックスジャンプが必要なため補間を使わない。
+function nearestPosIdx(t_ms) {
+  const n = posSession.length;
+  if (n === 0) return -1;
+  if (t_ms <= posSession[0].t_ms) return 0;
+  if (t_ms >= posSession[n - 1].t_ms) return n - 1;
+  let lo = 0, hi = n - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (posSession[mid].t_ms <= t_ms) lo = mid; else hi = mid;
+  }
+  return (t_ms - posSession[lo].t_ms) <= (posSession[hi].t_ms - t_ms) ? lo : hi;
+}
+
+// pos 側 t_ms 差分による central-diff 速度。pos サンプル posIdx の周辺
+// ±halfWin サンプルで (Δpos)/(Δt_ms) を取る。pos の生時刻を使うため
+// freq グリッドへの補間 LPF を経由しない。
+function posCentralDiffVel(posIdx, halfWin) {
+  const n = posSession.length;
+  if (posIdx < 0 || n === 0) return null;
+  const lo = Math.max(0, posIdx - halfWin);
+  const hi = Math.min(n - 1, posIdx + halfWin);
+  if (hi <= lo) return null;
+  const dtMs = posSession[hi].t_ms - posSession[lo].t_ms;
+  if (dtMs <= 0) return null;
+  return (posSession[hi].pos_m - posSession[lo].pos_m) / (dtMs / 1000);
+}
+
+// ═══════════════════════════════════════════════
+//  CSV 出力
+//  周波数データあり:
+//    - elapsed_s  : freq の ESP32 内部時計基準（gap 検出用、freq 系列内で完結）
+//    - freq_t_s   : freq 窓中点のブラウザ時刻（recordStartTime 基準・SAMPLING_TAIL 補正済）
+//    - pos_t_s    : 各 freq フレームに最近接の pos サンプル到着時刻（同 recordStartTime 基準）
+//    - pos_m      : freq_t_true 前後 2 pos サンプルの線形補間位置
+//    - vel_ms     : posCentralDiffVel を前後インデックスで線形補間した速度
+//   freq_t_s と pos_t_s を別列で保持することで、両系列の物理時刻整合
+//   (SAMPLING_TAIL_MS / POS_TAIL の妥当性) をオフラインで検証できる。
+//  周波数データなし: 位置のみ
+// ═══════════════════════════════════════════════
+function buildCsv() {
+  if (freqSession.length > 0) {
+    // ヘッダ: 既存列 + mag_960 .. mag_1040 の 81 列
+    const magHeaders = [];
+    for (let b = 0; b < N_BINS; b++) {
+      const f_hz = GOERTZEL_FREQ_LOW + b * GOERTZEL_FREQ_STEP;
+      magHeaders.push(`mag_${f_hz.toFixed(0)}`);
+    }
+    let out = 'elapsed_s,freq_t_s,pos_t_s,pos_m,vel_ms,freq_hz,amplitude,gap_ok,freq_w_hz,'
+            + magHeaders.join(',') + '\n';
+
+    const HALF_WIN = CSV_VEL_HALF_WIN;
+    const n = freqSession.length;
+
+    for (let i = 0; i < n; i++) {
+      const f = freqSession[i];
+      // samplingTailAdjMs（校正 τ_opt）を加味した補正済み freq 物理時刻
+      const adjTrueMs = f.t_true_ms + samplingTailAdjMs;
+      const freq_t_s  = (adjTrueMs - recordStartTime) / 1000;
+
+      // pos を freq_t_true 前後 2 点で線形補間（pos_m・vel_ms ともに補間値）。
+      // pos_t_s は診断用に最近傍サンプルのタイムスタンプを記録。
+      const ip = interpolatePos(adjTrueMs, HALF_WIN);
+      let pos_t_s_str = '', pos_m_str = '', vel_ms_str = '';
+      if (ip) {
+        pos_t_s_str = ((ip.t_ms_nearest - recordStartTime) / 1000).toFixed(4);
+        pos_m_str   = ip.pos_m.toFixed(6);
+        if (ip.vel_ms !== null) vel_ms_str = ip.vel_ms.toFixed(6);
+      }
+
+      const freq_w    = computeWeightedFreq(freqSession, i, HALF_WIN);
+      const amp_str   = (f.amplitude !== null && f.amplitude !== undefined)
+                         ? f.amplitude.toFixed(4) : '';
+      const freq_w_str = freq_w > 0 ? freq_w.toFixed(4) : '';
+
+      // スペクトル列: mag[b] = mag_q[b] * mag_scale で復元
+      const mags = new Array(N_BINS);
+      if (f.mag_q && f.mag_scale != null) {
+        for (let b = 0; b < N_BINS; b++) {
+          mags[b] = (f.mag_q[b] * f.mag_scale).toFixed(2);
+        }
+      } else {
+        mags.fill('');
+      }
+
+      out += `${f.elapsed_s.toFixed(4)},${freq_t_s.toFixed(4)},${pos_t_s_str},${pos_m_str},${vel_ms_str},`
+           + `${f.freq_hz.toFixed(2)},${amp_str},${f.gap_ok},${freq_w_str},`
+           + mags.join(',') + '\n';
+    }
+    return out;
+  }
+  let out = 'elapsed_s,pos_m,vel_ms\n';
+  for (const p of posSession) {
+    out += `${p.elapsed_s.toFixed(4)},${p.pos_m.toFixed(6)},${p.vel_ms.toFixed(6)}\n`;
+  }
+  return out;
+}
+
+function showCsvModal() {
+  const csv  = buildCsv();
+  const rows = csv.split('\n').length - 2;
+  document.getElementById('csvOutput').value          = csv;
+  document.getElementById('csvRowCount').textContent  = `${rows} rows`;
+  document.getElementById('csvModal').classList.add('open');
+}
+
+// ═══════════════════════════════════════════════
+//  イベントリスナー
+// ═══════════════════════════════════════════════
+document.getElementById('btnConnectCart').addEventListener('click', connectSmartCart);
+document.getElementById('btnConnectFreq').addEventListener('click', connectFreqSensor);
+document.getElementById('btnStart').addEventListener('click', startRecording);
+document.getElementById('btnStop').addEventListener('click',  stopRecording);
+document.getElementById('btnReset').addEventListener('click', resetAll);
+document.getElementById('btnCsv').addEventListener('click',   showCsvModal);
+
+document.getElementById('btnApplyCal').addEventListener('click', () => {
+  const tauEl = document.getElementById('calTau');
+  const tau_ms = parseInt(tauEl.textContent);
+  if (isNaN(tau_ms)) return;
+  samplingTailAdjMs = tau_ms;
+  drawScatter();
+  document.getElementById('calApplied').style.display = 'inline';
+});
+
+document.getElementById('btnCloseModal').addEventListener('click', () => {
+  document.getElementById('csvModal').classList.remove('open');
+});
+document.getElementById('btnCopy').addEventListener('click', () => {
+  const ta = document.getElementById('csvOutput');
+  ta.select();
+  navigator.clipboard.writeText(ta.value).catch(() => document.execCommand('copy'));
+});
+document.getElementById('btnDownload').addEventListener('click', () => {
+  const blob = new Blob([buildCsv()], { type: 'text/csv' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = `doppler_${new Date().toISOString().replace(/[:.]/g,'-')}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+// ─── Canvas リサイズ ───────────────────────────
+function resizeCanvases() {
+  for (const ctx of [ctxPos, ctxVel, ctxFreq, ctxScatter]) {
+    ctx.canvas.width = ctx.canvas.parentElement.clientWidth - 36;
+  }
+  drawChart(ctxPos,  posValues,  '#0077cc', posTimeValues,  document.getElementById('posAxisLabel'),  'm');
+  drawVelChart(ctxVel, velValues, velSmoothValues, posTimeValues, document.getElementById('velAxisLabel'));
+  drawFreqChart(ctxFreq, freqValues, freqWValues, freqTimeValues, document.getElementById('freqAxisLabel'));
+  drawScatter();
+}
+window.addEventListener('resize', resizeCanvases);
+resizeCanvases();
+
+// ─── 振幅スライダー ────────────────────────────
+document.getElementById('ampSlider').addEventListener('input', function() {
+  ampThreshold = parseInt(this.value, 10);
+  ampThresholdIsAuto = false;  // 手動操作 → 自動算出を無効化
+  document.getElementById('ampSliderVal').textContent = ampThreshold;
+  rebuildFreqBuffers();
+  drawFreqChart(ctxFreq, freqValues, freqWValues, freqTimeValues, document.getElementById('freqAxisLabel'));
+  drawScatter();
+  updateStats();
+});
+</script>
+</body>
+</html>
