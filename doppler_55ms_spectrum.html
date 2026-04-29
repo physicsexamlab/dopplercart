@@ -1060,6 +1060,15 @@ async function connectSmartCart() {
     await devCmd.writeValueWithoutResponse(new Uint8Array([0x37, 0x01, 0x01]));
     log('Sent WIRELESS_RMS_START (streaming).');
     await new Promise(r => setTimeout(r, 200));
+
+    // レート設定の確定クエリ（SPARKvue が 37 01 01 直後に送るステップ）
+    await posCmdChar.writeValueWithoutResponse(new Uint8Array([0x05, 0x10]));
+    await new Promise(r => setTimeout(r, 100));
+
+    // 実験設定コマンド（SPARKvue 100Hz キャプチャ実測値 06 af 05）
+    await devCmd.writeValueWithoutResponse(new Uint8Array([0x06, 0xaf, 0x05]));
+    await new Promise(r => setTimeout(r, 50));
+
     await devCmd.writeValueWithoutResponse(new Uint8Array([0x00]));
     log('Sent start trigger.');
 
