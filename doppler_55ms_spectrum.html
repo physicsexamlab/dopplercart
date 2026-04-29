@@ -405,12 +405,13 @@ function handlePosBurst(event) {
   const data = event.target.value;
   if (data.byteLength < 1) return;
 
-  const seq = data.getUint8(0);
+  // seq は 5bit カウンタ（0x00〜0x1f、周期 32）
+  const seq = data.getUint8(0) & 0x1F;
   if (seq === lastPacketSeq) return;
-  if (lastPacketSeq >= 0 && seq !== ((lastPacketSeq + 1) & 0xFF)) {
-    const lost = ((seq - lastPacketSeq - 1 + 256) & 0xFF);
+  if (lastPacketSeq >= 0 && seq !== ((lastPacketSeq + 1) & 0x1F)) {
+    const lost = ((seq - lastPacketSeq - 1 + 32) & 0x1F);
     console.warn(`[pos burst] seq gap: ${lastPacketSeq} → ${seq} (${lost} lost)`);
-    posBurstCarry = [];  // gap 時はキャリーを捨てる（データ不整合防止）
+    posBurstCarry = [];  // 真の gap 時のみキャリーをリセット
   }
   lastPacketSeq = seq;
 
