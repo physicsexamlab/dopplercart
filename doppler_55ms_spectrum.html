@@ -1060,9 +1060,8 @@ async function connectSmartCart() {
     await devCmd.writeValueWithoutResponse(new Uint8Array([0x37, 0x01, 0x01]));
     log('Sent WIRELESS_RMS_START (streaming).');
     await new Promise(r => setTimeout(r, 200));
-    // ↓ データが流れない場合はコメントを外す
-    // await devCmd.writeValueWithoutResponse(new Uint8Array([0x00]));
-    // log('Sent start trigger.');
+    await devCmd.writeValueWithoutResponse(new Uint8Array([0x00]));
+    log('Sent start trigger.');
 
     isCartConnected = true;
     setCartStatus('CONNECTED: ' + cartDevice.name, true);
