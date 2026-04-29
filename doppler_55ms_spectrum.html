@@ -335,7 +335,8 @@ let latestVelocity    = 0;
 let notifyReceived    = false;
 let lastNotifyTime    = 0;   // notify 到着時刻 [ms]
 let lastNotifyPos     = 0;   // notify 到着時の位置 [m]
-let posBurstCarry     = [];  // ATT 20-byte 上限による奇数 byte の持ち越しバッファ
+let posBurstCarry     = [];  // 100Hz 特有: ATT 19-byte ペイロードで 9.5 サンプルとなる奇数 byte の持ち越し（20Hz/50Hz は偶数ペイロードのため不要）
+let lastSampleEndTime = 0;   // 逐次クロック: 直前バーストの最終サンプル t_ms（0 = 未初期化）
 
 // ═══════════════════════════════════════════════
 //  Freq Sensor (ESP32) 状態
@@ -411,7 +412,8 @@ function handlePosBurst(event) {
   if (lastPacketSeq >= 0 && seq !== ((lastPacketSeq + 1) & 0x1F)) {
     const lost = ((seq - lastPacketSeq - 1 + 32) & 0x1F);
     console.warn(`[pos burst] seq gap: ${lastPacketSeq} → ${seq} (${lost} lost)`);
-    posBurstCarry = [];  // 真の gap 時のみキャリーをリセット
+    posBurstCarry = [];
+    lastSampleEndTime = 0;  // gap 発生時は逐次クロックをリセット
   }
   lastPacketSeq = seq;
 
@@ -423,6 +425,23 @@ function handlePosBurst(event) {
   const nSamples = Math.floor(bytes.length / 2);
   const t_recv   = performance.now();
 
+  // 逐次クロック方式でタイムスタンプを生成。
+  // t_recv はBLEスケジューラのジッター（±5–10ms）を含むため、バースト内全サンプルに
+  // 同じジッターが伝播する t_recv 逆算方式を避け、前バーストの末尾から 10ms ずつ進める。
+  // 予測 t_recv との乖離が ±2 サンプル周期を超えた場合のみ t_recv で再アンカーする。
+  let t0;
+  if (lastSampleEndTime === 0) {
+    // 初回または gap 後: t_recv を基準に逆算
+    t0 = t_recv - (nSamples - 1) * POS_PERIOD_MS;
+  } else {
+    t0 = lastSampleEndTime + POS_PERIOD_MS;
+    const drift = (t0 + (nSamples - 1) * POS_PERIOD_MS) - t_recv;
+    if (Math.abs(drift) > POS_PERIOD_MS * 2) {
+      t0 = t_recv - (nSamples - 1) * POS_PERIOD_MS;
+      console.warn(`[pos burst] clock re-anchor seq=${seq}: drift=${drift.toFixed(1)}ms`);
+    }
+  }
+
   for (let i = 0; i < nSamples; i++) {
     const lo = bytes[2 * i];
     const hi = bytes[2 * i + 1];
@@ -430,8 +449,7 @@ function handlePosBurst(event) {
     const rawChange = raw >= 0x8000 ? raw - 0x10000 : raw;
     countAccumulated += rawChange;
     const newPos = countAccumulated * POS_SCALE;
-    // バースト内タイムスタンプを等間隔で逆算（最後のサンプルが t_recv）
-    const t_ms = t_recv - (nSamples - 1 - i) * POS_PERIOD_MS;
+    const t_ms = t0 + i * POS_PERIOD_MS;
 
     if (lastNotifyTime > 0 && t_ms > lastNotifyTime) {
       latestVelocity = (newPos - lastNotifyPos) / ((t_ms - lastNotifyTime) / 1000);
@@ -447,6 +465,7 @@ function handlePosBurst(event) {
     }
   }
 
+  lastSampleEndTime = t0 + (nSamples - 1) * POS_PERIOD_MS;  // 逐次クロックを更新
   posBurstCarry = bytes.slice(nSamples * 2);  // 奇数余りを次バーストへ持ち越す
 
   // 8 バーストごとに ACK（SPARKvue の動作に合わせる）
@@ -1066,7 +1085,9 @@ async function connectSmartCart() {
     await posCmdChar.writeValueWithoutResponse(new Uint8Array([0x05, 0x10]));
     await new Promise(r => setTimeout(r, 100));
 
-    // 実験設定コマンド（SPARKvue 100Hz キャプチャ実測値 06 af 05）
+    // 実験設定コマンド（SPARKvue 100Hz 実測値 06 af 05）
+    // 注意: 中央 byte は 20Hz=0xac, 50Hz=0xad, 100Hz=0xaf と変化する観測あり。
+    // レートまたは session 状態に依存する可能性があり、プロトコル定数として確定していない。
     await devCmd.writeValueWithoutResponse(new Uint8Array([0x06, 0xaf, 0x05]));
     await new Promise(r => setTimeout(r, 50));
 
@@ -1234,6 +1255,7 @@ function startRecording() {
   lastNotifyTime  = 0;
   lastNotifyPos   = 0;
   posBurstCarry   = [];
+  lastSampleEndTime = 0;
   prevFreqEspTime  = -1;
   firstFreqEspTime = -1;
   firstFreqRecvMs  = -1;
@@ -1260,7 +1282,7 @@ function stopRecording() {
 
 function resetAll() {
   stopRecording();
-  countAccumulated = 0; lastPacketSeq = -1; posBurstCarry = [];
+  countAccumulated = 0; lastPacketSeq = -1; posBurstCarry = []; lastSampleEndTime = 0;
   latestPosition = 0; notifyReceived = false;
   latestVelocity = 0; lastNotifyTime = 0; lastNotifyPos = 0;
   ampThreshold = 100; ampThresholdIsAuto = true;
