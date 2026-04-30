@@ -471,8 +471,8 @@ function handlePosBurst(event) {
     }
 
     // 表示チャートを 100Hz で更新（freq notify 待ちで間引かれないように）。
-    // 時刻基準は freq 側と揃えるため firstFreqRecvMs を使う。freq 未着の間はスキップ。
-    if (firstFreqRecvMs >= 0) {
+    // 時刻基準は freq 側と揃えるため firstFreqRecvMs を使う。freq 未着 or 録画停止後はスキップ。
+    if (isRecording && firstFreqRecvMs >= 0) {
       const t_chart_s = (t_ms - firstFreqRecvMs) / 1000;
       posValues.push(newPos);
       velValues.push(latestVelocity);
