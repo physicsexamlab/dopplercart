@@ -188,6 +188,18 @@
     </div>
   </div>
 
+  <!-- ─── スペクトル品質インジケーター ─── -->
+  <div id="qualityBar" style="display:flex; align-items:center; gap:12px; padding:7px 16px;
+       background:var(--panel); border:1px solid var(--border); border-radius:6px; font-size:0.78rem;">
+    <span style="color:var(--dim); font-size:0.65rem; text-transform:uppercase; letter-spacing:0.08em; white-space:nowrap;">Spectral Quality</span>
+    <span id="sQualityBadge" style="font-family:'Share Tech Mono',monospace; font-weight:700; font-size:0.85rem; color:var(--dim);">—</span>
+    <span id="sQualityDetail" style="font-family:'Share Tech Mono',monospace; color:var(--dim); font-size:0.72rem;"></span>
+    <label style="margin-left:auto; display:flex; align-items:center; gap:6px; cursor:pointer; font-size:0.78rem; color:var(--dim); white-space:nowrap;">
+      <input type="checkbox" id="qualityFilter" style="accent-color:var(--col-freq);">
+      Filter poor quality from scatter
+    </label>
+  </div>
+
   <div style="display:flex; flex-direction:column; gap:16px;">
     <div class="chart-panel pos">
       <div class="chart-header">
@@ -358,6 +370,7 @@ let samplingTailAdjMs = 0;   // calibrateSamplingTail() が求める τ_opt [ms]
                               // nearestPosIdx / CSV の freq_t_s に加算して補正する。
                               // 新 SAMPLING_TAIL = 37 − samplingTailAdjMs。
 let bleStallCount   = 0;     // 録画中に検出した BLE stall（|drift| > 200ms）回数
+let qualityFilterEnabled = false;  // true: poor quality フレームを散布図・回帰から除外
 
 // ═══════════════════════════════════════════════
 //  データバッファ
@@ -383,6 +396,12 @@ const FREQ_W_HALF_WIN = 3; // 周波数振幅加重平均の半窓幅（165ms固
 const GOERTZEL_FREQ_LOW  = 960.0;  // Arduino FREQ_LOW  と一致させること
 const GOERTZEL_FREQ_HIGH = 1040.0; // Arduino FREQ_HIGH と一致させること
 const GOERTZEL_FREQ_STEP = 1.0;    // Arduino FREQ_STEP と一致させること
+
+// スペクトル品質フィルタ閾値
+// sidelobe_ratio = (ピーク周辺 ±QUALITY_EXCLUSION_HZ 外の最大値) / ピーク値
+// 0.50 未満: Good, 0.75 未満: Marginal, 0.75 以上: Poor（multipath 支配的）
+const QUALITY_SIDELOBE_MAX  = 0.75;   // Poor 判定の上限
+const QUALITY_EXCLUSION_HZ  = 10.0;   // ピーク周辺の排他ゾーン半幅 [Hz]
 const N_BINS             = Math.round((GOERTZEL_FREQ_HIGH - GOERTZEL_FREQ_LOW) / GOERTZEL_FREQ_STEP) + 1;  // 81
 
 // バイナリパケット形式（doppler-cart-n800-spectrum.ino と一致させること）
@@ -560,7 +579,10 @@ function onFreqNotify(event) {
   }
   prevFreqEspTime = t_esp_s;
 
-  freqSession.push({ t_true_ms, elapsed_s, freq_hz, gap_ok, amplitude, mag_scale, mag_q });
+  const { sidelobe_ratio, fwhm_hz } = computeSpecQuality(mag_q);
+  freqSession.push({ t_true_ms, elapsed_s, freq_hz, gap_ok, amplitude, mag_scale, mag_q,
+                     sidelobe_ratio, fwhm_hz });
+  updateQualityIndicator(sidelobe_ratio, fwhm_hz);
 
   // pos/vel チャートは handlePosBurst が 100Hz で push & draw するため、ここでは何もしない
 
@@ -856,6 +878,54 @@ function computeWeightedFreq(session, centerIdx, halfWin) {
 }
 
 // ═══════════════════════════════════════════════
+//  スペクトル品質指標（multipath 検出）
+//  mag_q: Uint16Array[N_BINS]（mag_scale 適用前の量子化値）
+//  sidelobe_ratio: ピーク周辺 ±QUALITY_EXCLUSION_HZ 外の最大値 / ピーク値
+//  fwhm_hz: 一次ピークの半値全幅 [Hz]
+// ═══════════════════════════════════════════════
+function computeSpecQuality(mag_q) {
+  let peakIdx = 0;
+  for (let b = 1; b < N_BINS; b++) {
+    if (mag_q[b] > mag_q[peakIdx]) peakIdx = b;
+  }
+  const peakVal = mag_q[peakIdx];
+  if (peakVal === 0) return { sidelobe_ratio: 0, fwhm_hz: 0 };
+
+  // FWHM: 半値 (peakVal/2) を下回るまで左右に広げる
+  const halfMax = peakVal / 2;
+  let lo = peakIdx, hi = peakIdx;
+  while (lo > 0 && mag_q[lo - 1] > halfMax) lo--;
+  while (hi < N_BINS - 1 && mag_q[hi + 1] > halfMax) hi++;
+  const fwhm_hz = (hi - lo) * GOERTZEL_FREQ_STEP;
+
+  // サイドローブ比: ピーク周辺 ±excl bins を除外した領域の最大値 / ピーク値
+  const excl = Math.round(QUALITY_EXCLUSION_HZ / GOERTZEL_FREQ_STEP);
+  let secondMax = 0;
+  for (let b = 0; b < N_BINS; b++) {
+    if (Math.abs(b - peakIdx) <= excl) continue;
+    if (mag_q[b] > secondMax) secondMax = mag_q[b];
+  }
+  const sidelobe_ratio = secondMax / peakVal;
+
+  return { sidelobe_ratio, fwhm_hz };
+}
+
+function qualityLabel(sidelobe_ratio) {
+  if (sidelobe_ratio < 0.50) return { text: 'GOOD',     color: '#008855' };
+  if (sidelobe_ratio < 0.75) return { text: 'MARGINAL', color: '#b86e00' };
+  return                            { text: 'POOR',     color: '#d42045' };
+}
+
+function updateQualityIndicator(sidelobe_ratio, fwhm_hz) {
+  const { text, color } = qualityLabel(sidelobe_ratio);
+  const badge  = document.getElementById('sQualityBadge');
+  const detail = document.getElementById('sQualityDetail');
+  if (badge)  { badge.textContent = text; badge.style.color = color; }
+  if (detail) detail.textContent =
+    `sidelobe=${sidelobe_ratio.toFixed(2)}  FWHM=${fwhm_hz.toFixed(0)} Hz`;
+}
+
+// ═══════════════════════════════════════════════
 //  表示用周波数バッファ再構築（ampThreshold 変更時に呼ぶ）
 // ═══════════════════════════════════════════════
 function rebuildFreqBuffers() {
@@ -1006,14 +1076,22 @@ function drawScatter() {
     const x = toX(v), y = toY(df);
     if (x < PAD_L || x > PAD_L+plotW || y < PAD_T || y > PAD_T+plotH) continue;
     const aboveThresh = amp >= ampThreshold;
+    const sr      = f.sidelobe_ratio ?? 0;
+    const isPoor  = sr >= QUALITY_SIDELOBE_MAX;
+
+    // qualityFilter ON かつ閾値以上の品質不良フレームは散布図から除外
+    if (qualityFilterEnabled && isPoor && aboveThresh) continue;
+
     ctxScatter.beginPath();
     ctxScatter.arc(x, y, aboveThresh ? 5 : 3, 0, Math.PI*2);
     if (!aboveThresh) {
-      ctxScatter.fillStyle = 'rgba(160,160,160,0.25)';  // 閾値未満は薄いグレー（gap_ok 問わず）
+      ctxScatter.fillStyle = 'rgba(160,160,160,0.25)';  // 閾値未満は薄いグレー
     } else if (!f.gap_ok) {
-      ctxScatter.fillStyle = 'rgba(200,0,0,0.6)';       // 閾値以上かつ gap_ok=false は赤
+      ctxScatter.fillStyle = 'rgba(200,0,0,0.6)';       // gap_ok=false は赤
+    } else if (isPoor) {
+      ctxScatter.fillStyle = 'rgba(204,102,0,0.28)';    // 品質不良は薄いオレンジ
     } else {
-      ctxScatter.fillStyle = 'rgba(204,102,0,0.75)';
+      ctxScatter.fillStyle = 'rgba(204,102,0,0.75)';    // 品質良好は通常オレンジ
     }
     ctxScatter.fill();
     if (aboveThresh) nShown++;
@@ -1024,7 +1102,9 @@ function drawScatter() {
   ctxScatter.fillStyle='#222';
   ctxScatter.fillText(`Theory: Δf = f₀·v/(vₛ−v)  f₀=${fRef.toFixed(1)} Hz  vₛ=343 m/s`, PAD_L+6, PAD_T+14);
   const infoEl = document.getElementById('scatterInfo');
-  if (infoEl) infoEl.textContent = `amp≥${ampThreshold}: ${nShown} pts / total: ${n}`;
+  const nPoor  = freqSession.filter(f => (f.sidelobe_ratio ?? 0) >= QUALITY_SIDELOBE_MAX).length;
+  if (infoEl) infoEl.textContent =
+    `amp≥${ampThreshold}: ${nShown} pts  poor: ${nPoor}/${n}${qualityFilterEnabled ? ' (filtered)' : ''}`;
 }
 
 // ═══════════════════════════════════════════════
@@ -1237,6 +1317,7 @@ function calibrateSamplingTail() {
     for (let i = 0; i < freqSession.length; i++) {
       const f = freqSession[i];
       if (f.freq_hz <= 0 || (f.amplitude ?? 0) < 300) continue;
+      if (qualityFilterEnabled && (f.sidelobe_ratio ?? 0) >= QUALITY_SIDELOBE_MAX) continue;
       // τ だけシフトした時刻で pos を探す
       const k = nearestPosIdx(f.t_true_ms + tau);
       if (k < 0) continue;
@@ -1357,6 +1438,11 @@ function resetAll() {
   samplingTailAdjMs = 0;
   document.getElementById('calibPanel').style.display  = 'none';
   document.getElementById('calApplied').style.display  = 'none';
+  // 品質インジケーターをリセット
+  const qb = document.getElementById('sQualityBadge');
+  if (qb) { qb.textContent = '—'; qb.style.color = 'var(--dim)'; }
+  const qd = document.getElementById('sQualityDetail');
+  if (qd) qd.textContent = '';
 }
 
 // posSession の t_ms を二分探索し、前後 2 点で線形補間する。
@@ -1445,7 +1531,7 @@ function buildCsv() {
       const f_hz = GOERTZEL_FREQ_LOW + b * GOERTZEL_FREQ_STEP;
       magHeaders.push(`mag_${f_hz.toFixed(0)}`);
     }
-    let out = 'elapsed_s,freq_t_s,pos_t_s,pos_m,vel_ms,freq_hz,amplitude,gap_ok,freq_w_hz,'
+    let out = 'elapsed_s,freq_t_s,pos_t_s,pos_m,vel_ms,freq_hz,amplitude,gap_ok,freq_w_hz,sidelobe_ratio,fwhm_hz,'
             + magHeaders.join(',') + '\n';
 
     const HALF_WIN = CSV_VEL_HALF_WIN;
@@ -1482,8 +1568,10 @@ function buildCsv() {
         mags.fill('');
       }
 
+      const sr_str   = f.sidelobe_ratio != null ? f.sidelobe_ratio.toFixed(4) : '';
+      const fwhm_str = f.fwhm_hz        != null ? f.fwhm_hz.toFixed(1)        : '';
       out += `${f.elapsed_s.toFixed(4)},${freq_t_s.toFixed(4)},${pos_t_s_str},${pos_m_str},${vel_ms_str},`
-           + `${f.freq_hz.toFixed(2)},${amp_str},${f.gap_ok},${freq_w_str},`
+           + `${f.freq_hz.toFixed(2)},${amp_str},${f.gap_ok},${freq_w_str},${sr_str},${fwhm_str},`
            + mags.join(',') + '\n';
     }
     return out;
@@ -1552,6 +1640,17 @@ function resizeCanvases() {
 }
 window.addEventListener('resize', resizeCanvases);
 resizeCanvases();
+
+// ─── 品質フィルタチェックボックス ────────────────
+document.getElementById('qualityFilter').addEventListener('change', function() {
+  qualityFilterEnabled = this.checked;
+  drawScatter();
+  // 停止後のみ校正を再計算（録画中は drawScatter のみ更新）
+  if (!isRecording && freqSession.length >= 20 && posSession.length >= 20) {
+    const cal = calibrateSamplingTail();
+    if (cal) showCalibResult(cal);
+  }
+});
 
 // ─── 振幅スライダー ────────────────────────────
 document.getElementById('ampSlider').addEventListener('input', function() {
