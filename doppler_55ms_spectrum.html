@@ -357,6 +357,7 @@ let samplerTimerId  = null;
 let samplingTailAdjMs = 0;   // calibrateSamplingTail() が求める τ_opt [ms]。
                               // nearestPosIdx / CSV の freq_t_s に加算して補正する。
                               // 新 SAMPLING_TAIL = 37 − samplingTailAdjMs。
+let bleStallCount   = 0;     // 録画中に検出した BLE stall（|drift| > 200ms）回数
 
 // ═══════════════════════════════════════════════
 //  データバッファ
@@ -411,7 +412,9 @@ function handlePosBurst(event) {
   if (seq === lastPacketSeq) return;
   if (lastPacketSeq >= 0 && seq !== ((lastPacketSeq + 1) & 0x1F)) {
     const lost = ((seq - lastPacketSeq - 1 + 32) & 0x1F);
-    console.warn(`[pos burst] seq gap: ${lastPacketSeq} → ${seq} (${lost} lost)`);
+    if (isRecording) {
+      console.warn(`[pos burst] seq gap: ${lastPacketSeq} → ${seq} (${lost} lost)`);
+    }
     posBurstCarry = [];
     lastSampleEndTime = 0;  // gap 発生時は逐次クロックをリセット
   }
@@ -438,7 +441,18 @@ function handlePosBurst(event) {
     const drift = (t0 + (nSamples - 1) * POS_PERIOD_MS) - t_recv;
     if (Math.abs(drift) > POS_PERIOD_MS * 2) {
       t0 = t_recv - (nSamples - 1) * POS_PERIOD_MS;
-      console.warn(`[pos burst] clock re-anchor seq=${seq}: drift=${drift.toFixed(1)}ms`);
+      // 録画中のみログを出す（停止後も BLE 受信は続くが、ノイズで「測定中」と誤認させない）
+      if (isRecording) {
+        if (Math.abs(drift) > 200) {
+          // BLE stall: バーストが長時間途絶え、その後一括配送される事象。
+          // re-anchor で時刻整合は復元されるが、stall 中の cart-side サンプルは欠落している可能性が高い。
+          bleStallCount++;
+          console.warn(`[pos burst] BLE stall #${bleStallCount}: seq=${seq} drift=${drift.toFixed(1)}ms`);
+        } else if (Math.abs(drift) > 50) {
+          // 通常ジッター（±20–40ms）は抑制し、明確に異常な再アンカのみ表示
+          console.warn(`[pos burst] clock re-anchor seq=${seq}: drift=${drift.toFixed(1)}ms`);
+        }
+      }
     }
   }
 
@@ -450,7 +464,7 @@ function handlePosBurst(event) {
     const rawChange = raw >= 0x8000 ? raw - 0x10000 : raw;
     // 異常 rawChange 検出: |rawChange| > 200 cnt/10ms ≈ 2.4 m/s
     // (cart の現実的な最大速度 ≈ 1.5 m/s を超える単発サンプルを検知)
-    if (Math.abs(rawChange) > 200) {
+    if (Math.abs(rawChange) > 200 && isRecording) {
       console.warn(`[pos burst] rawChange spike: seq=${seq} i=${i}/${nSamples} raw=${rawChange} carry=${posBurstCarry.length} payload=${payload.length}`);
     }
     countAccumulated += rawChange;
@@ -1280,6 +1294,8 @@ function startRecording() {
   latestVelocity  = 0;
   lastNotifyTime  = 0;
   lastNotifyPos   = 0;
+  bleStallCount   = 0;
+  log('Recording started.');
   // posBurstCarry / lastSampleEndTime は意図的にリセットしない。
   // 接続中は 100Hz バースト decoder が連続動作しており、録画開始は
   // 「以後のサンプルを posSession に保存し始める」だけの境界である。
@@ -1293,11 +1309,16 @@ function startRecording() {
 }
 
 function stopRecording() {
+  if (!isRecording) return;  // 既に停止済みなら二重実行しない
   isRecording = false;
   if (samplerTimerId) { clearInterval(samplerTimerId); samplerTimerId = null; }
   const hasData = posSession.length > 0 || freqSession.length > 0;
   document.getElementById('btnCsv').disabled = !hasData;
   updateButtonStates();
+  // 停止を明示ログ。BLE subscription は接続中ずっと動き続けるため、
+  // 「録画は停止したが BLE 通信は継続している」ことをユーザに伝える。
+  const stallNote = bleStallCount > 0 ? ` (BLE stall ${bleStallCount} 回検出)` : '';
+  log(`Recording stopped. pos=${posSession.length} frames, freq=${freqSession.length} frames${stallNote}. (BLE subscription remains active)`);
   computeDynamicAmpThreshold();  // 静止振幅から閾値を自動算出（autoモード時のみ）
   drawScatter();  // 停止後に全データで散布図を確定描画
 
