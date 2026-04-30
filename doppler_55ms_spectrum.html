@@ -442,6 +442,7 @@ function handlePosBurst(event) {
     }
   }
 
+  let chartDirty = false;
   for (let i = 0; i < nSamples; i++) {
     const lo = bytes[2 * i];
     const hi = bytes[2 * i + 1];
@@ -468,10 +469,31 @@ function handlePosBurst(event) {
       const elapsed_s = (t_ms - recordStartTime) / 1000;
       posSession.push({ t_ms, elapsed_s, pos_m: newPos, vel_ms: latestVelocity });
     }
+
+    // 表示チャートを 100Hz で更新（freq notify 待ちで間引かれないように）。
+    // 時刻基準は freq 側と揃えるため firstFreqRecvMs を使う。freq 未着の間はスキップ。
+    if (firstFreqRecvMs >= 0) {
+      const t_chart_s = (t_ms - firstFreqRecvMs) / 1000;
+      posValues.push(newPos);
+      velValues.push(latestVelocity);
+      posTimeValues.push(t_chart_s);
+      const sliceV = velValues.slice(Math.max(0, velValues.length - VEL_SMOOTH_WIN));
+      velSmoothValues.push(sliceV.reduce((a, b) => a + b, 0) / sliceV.length);
+      chartDirty = true;
+    }
   }
 
   lastSampleEndTime = t0 + (nSamples - 1) * POS_PERIOD_MS;  // 逐次クロックを更新
   posBurstCarry = bytes.slice(nSamples * 2);  // 奇数余りを次バーストへ持ち越す
+
+  // バースト末尾でまとめて trim & 描画（ループ内で毎サンプル draw すると重い）
+  if (chartDirty) {
+    while (posValues.length > MAX_POINTS) {
+      posValues.shift(); velValues.shift(); velSmoothValues.shift(); posTimeValues.shift();
+    }
+    drawChart(ctxPos, posValues, '#0077cc', posTimeValues, document.getElementById('posAxisLabel'), 'm');
+    drawVelChart(ctxVel, velValues, velSmoothValues, posTimeValues, document.getElementById('velAxisLabel'));
+  }
 
   // 8 バーストごとに ACK（SPARKvue の動作に合わせる）
   if (posAckChar && (seq & 0x07) === 0x07) {
@@ -526,17 +548,7 @@ function onFreqNotify(event) {
 
   freqSession.push({ t_true_ms, elapsed_s, freq_hz, gap_ok, amplitude, mag_scale, mag_q });
 
-  // 位置チャートを ESP32 タイムスタンプに同期して更新（表示用のみ・記録は handlePosBurst で行う）
-  if (notifyReceived) {
-    posValues.push(latestPosition);
-    velValues.push(latestVelocity);
-    posTimeValues.push(elapsed_s);
-    const sliceV = velValues.slice(Math.max(0, velValues.length - VEL_SMOOTH_WIN));
-    velSmoothValues.push(sliceV.reduce((a, b) => a + b, 0) / sliceV.length);
-    if (posValues.length > MAX_POINTS) { posValues.shift(); velValues.shift(); velSmoothValues.shift(); posTimeValues.shift(); }
-    drawChart(ctxPos, posValues, '#0077cc', posTimeValues, document.getElementById('posAxisLabel'), 'm');
-    drawVelChart(ctxVel, velValues, velSmoothValues, posTimeValues, document.getElementById('velAxisLabel'));
-  }
+  // pos/vel チャートは handlePosBurst が 100Hz で push & draw するため、ここでは何もしない
 
   // 振幅加重平均（トレーリング窓）
   const freq_w = computeWeightedFreq(freqSession, freqSession.length - 1, FREQ_W_HALF_WIN);
