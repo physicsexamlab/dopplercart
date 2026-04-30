@@ -447,6 +447,11 @@ function handlePosBurst(event) {
     const hi = bytes[2 * i + 1];
     const raw = lo | (hi << 8);
     const rawChange = raw >= 0x8000 ? raw - 0x10000 : raw;
+    // 異常 rawChange 検出: |rawChange| > 200 cnt/10ms ≈ 2.4 m/s
+    // (cart の現実的な最大速度 ≈ 1.5 m/s を超える単発サンプルを検知)
+    if (Math.abs(rawChange) > 200) {
+      console.warn(`[pos burst] rawChange spike: seq=${seq} i=${i}/${nSamples} raw=${rawChange} carry=${posBurstCarry.length} payload=${payload.length}`);
+    }
     countAccumulated += rawChange;
     const newPos = countAccumulated * POS_SCALE;
     const t_ms = t0 + i * POS_PERIOD_MS;
@@ -1200,7 +1205,7 @@ function calibrateSamplingTail() {
   let bestTau = 0, bestR2 = -1, bestSlope = 0;
   let curR2 = 0,   curSlope = 0;
 
-  for (let tau = -80; tau <= 80; tau += 2) {
+  for (let tau = -200; tau <= 200; tau += 2) {
     let sumX=0, sumY=0, sumXX=0, sumXY=0, sumYY=0, nPts=0;
 
     for (let i = 0; i < freqSession.length; i++) {
