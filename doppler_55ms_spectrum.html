@@ -386,7 +386,7 @@ let velSmoothValues = [];  // 5点トレーリング平均
 let freqValues      = [];
 let freqWValues     = [];  // 振幅加重平均周波数（トレーリング窓）
 let posTimeValues   = [];  // 位置サンプルの elapsed_s（時間軸用）
-let freqTimeValues  = [];  // 周波数サンプルの elapsed_s（時間軸用）
+let freqTimeValues  = [];  // 周波数サンプルの freq_t_s（samplingTailAdjMs補正済、時間軸用）
 
 // グラフ時間軸統一用
 let recordStartTime_s = 0;  // 記録開始時刻（秒単位、firstFreqRecvMs基準）
@@ -597,7 +597,10 @@ function onFreqNotify(event) {
   if (freq_hz > 0 && (amplitude === null || amplitude >= ampThreshold)) {
     freqValues.push(freq_hz);
     freqWValues.push(freq_w);
-    freqTimeValues.push(elapsed_s);
+    // freq_t_s を計算（CSV出力と一致させるため、elapsed_s ではなく t_true_ms + samplingTailAdjMs を使用）
+    const adjTrueMs = t_true_ms + samplingTailAdjMs;
+    const freq_t_s = (adjTrueMs - recordStartTime) / 1000;
+    freqTimeValues.push(freq_t_s);
     if (freqValues.length > MAX_POINTS) { freqValues.shift(); freqWValues.shift(); freqTimeValues.shift(); }
     drawFreqChart(ctxFreq, freqValues, freqWValues, freqTimeValues,
                   document.getElementById('freqAxisLabel'));
@@ -960,7 +963,12 @@ function rebuildFreqBuffers() {
   }, []).slice(-MAX_POINTS);
   freqValues     = filteredIdx.map(i => freqSession[i].freq_hz);
   freqWValues    = filteredIdx.map(i => computeWeightedFreq(freqSession, i, FREQ_W_HALF_WIN));
-  freqTimeValues = filteredIdx.map(i => freqSession[i].elapsed_s);
+  // freq_t_s を計算（CSV出力と一致させるため、elapsed_s ではなく t_true_ms + samplingTailAdjMs を使用）
+  freqTimeValues = filteredIdx.map(i => {
+    const f = freqSession[i];
+    const adjTrueMs = f.t_true_ms + samplingTailAdjMs;
+    return (adjTrueMs - recordStartTime) / 1000;
+  });
 }
 
 // ═══════════════════════════════════════════════
