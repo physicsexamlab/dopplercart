@@ -311,7 +311,7 @@ const POS_PERIOD_MS = 1000 / POS_RATE_HZ;  // 10ms
 
 const POS_SCALE          = 0.09895 / 816;  // count → meter
 const SAMPLE_INTERVAL_MS = 55;
-const MAX_POINTS         = 300;
+const MAX_POINTS         = 3000;  // 大幅に増加。グラフの時間軸統一に伴い削除を遅延する
 
 // ESP32 BLE 遅延補正:
 //   ファームは窓中点 (t0+t1)/2 をタイムスタンプとして送信。
@@ -387,6 +387,10 @@ let freqValues      = [];
 let freqWValues     = [];  // 振幅加重平均周波数（トレーリング窓）
 let posTimeValues   = [];  // 位置サンプルの elapsed_s（時間軸用）
 let freqTimeValues  = [];  // 周波数サンプルの elapsed_s（時間軸用）
+
+// グラフ時間軸統一用
+let recordStartTime_s = 0;  // 記録開始時刻（秒単位、firstFreqRecvMs基準）
+let recordEndTime_s   = 0;  // 記録停止時刻（秒単位、firstFreqRecvMs基準）
 
 // 表示フィルタ・スムージング
 let ampThreshold = 100;      // 振幅フィルタ閾値（スライダーで変更）
@@ -682,7 +686,14 @@ function drawChart(ctx, data, color, times, labelEl, unit) {
 
   const toY = v => PAD_T + plotH - ((v - min) / range) * plotH;
   const useTimes = times && times.length === data.length && times[times.length - 1] > times[0];
-  const tMin = useTimes ? times[0] : 0, tMax = useTimes ? times[times.length - 1] : data.length - 1;
+  // グラフの時間軸を統一：左が t=0、右が停止時刻
+  let tMin = 0, tMax = 1;
+  if (useTimes && times.length > 0) {
+    tMin = 0;  // 常に 0 から開始
+    tMax = recordEndTime_s > 0 ? recordEndTime_s : times[times.length - 1];  // 停止時刻または最新時刻
+  } else if (!useTimes) {
+    tMax = data.length - 1;
+  }
   const toX = i => PAD_L + ((useTimes ? times[i] : i) - tMin) / (tMax - tMin) * plotW;
 
   // グリッド（水平 5 本）
@@ -749,7 +760,14 @@ function drawVelChart(ctx, rawData, smoothData, times, labelEl) {
   const range = max - min;
   const toY = v => PAD_T + plotH - ((v - min) / range) * plotH;
   const useTimes = times && times.length === rawData.length && times[times.length - 1] > times[0];
-  const tMin = useTimes ? times[0] : 0, tMax = useTimes ? times[times.length - 1] : rawData.length - 1;
+  // グラフの時間軸を統一：左が t=0、右が停止時刻
+  let tMin = 0, tMax = 1;
+  if (useTimes && times.length > 0) {
+    tMin = 0;  // 常に 0 から開始
+    tMax = recordEndTime_s > 0 ? recordEndTime_s : times[times.length - 1];  // 停止時刻または最新時刻
+  } else if (!useTimes) {
+    tMax = rawData.length - 1;
+  }
   const toX = i => PAD_L + ((useTimes ? times[i] : i) - tMin) / (tMax - tMin) * plotW;
 
   // グリッド
@@ -811,7 +829,14 @@ function drawFreqChart(ctx, rawData, wData, times, labelEl) {
   const range = max - min;
   const toY = v => PAD_T + plotH - ((v - min) / range) * plotH;
   const useTimes = times && times.length === rawData.length && times[times.length - 1] > times[0];
-  const tMin = useTimes ? times[0] : 0, tMax = useTimes ? times[times.length - 1] : rawData.length - 1;
+  // グラフの時間軸を統一：左が t=0、右が停止時刻
+  let tMin = 0, tMax = 1;
+  if (useTimes && times.length > 0) {
+    tMin = 0;  // 常に 0 から開始
+    tMax = recordEndTime_s > 0 ? recordEndTime_s : times[times.length - 1];  // 停止時刻または最新時刻
+  } else if (!useTimes) {
+    tMax = rawData.length - 1;
+  }
   const toX = i => PAD_L + ((useTimes ? times[i] : i) - tMin) / (tMax - tMin) * plotW;
 
   // グリッド
@@ -1393,6 +1418,14 @@ function stopRecording() {
   if (!isRecording) return;  // 既に停止済みなら二重実行しない
   isRecording = false;
   if (samplerTimerId) { clearInterval(samplerTimerId); samplerTimerId = null; }
+
+  // グラフの時間軸統一：最後のデータから停止時刻を取得
+  if (freqSession.length > 0) {
+    recordEndTime_s = freqSession[freqSession.length - 1].elapsed_s;
+  } else if (posSession.length > 0) {
+    recordEndTime_s = posSession[posSession.length - 1].elapsed_s;
+  }
+
   const hasData = posSession.length > 0 || freqSession.length > 0;
   document.getElementById('btnCsv').disabled = !hasData;
   updateButtonStates();
@@ -1401,6 +1434,11 @@ function stopRecording() {
   const stallNote = bleStallCount > 0 ? ` (BLE stall ${bleStallCount} 回検出)` : '';
   log(`Recording stopped. pos=${posSession.length} frames, freq=${freqSession.length} frames${stallNote}. (BLE subscription remains active)`);
   computeDynamicAmpThreshold();  // 静止振幅から閾値を自動算出（autoモード時のみ）
+
+  // グラフを停止時刻で再描画（時間軸統一）
+  drawChart(ctxPos, posValues, '#0077cc', posTimeValues, document.getElementById('posAxisLabel'), 'm');
+  drawVelChart(ctxVel, velValues, velSmoothValues, posTimeValues, document.getElementById('velAxisLabel'));
+  drawFreqChart(ctxFreq, freqValues, freqWValues, freqTimeValues, document.getElementById('freqAxisLabel'));
   drawScatter();  // 停止後に全データで散布図を確定描画
 
   // SAMPLING_TAIL 校正を自動実行して結果パネルを表示
@@ -1421,6 +1459,8 @@ function resetAll() {
   prevFreqEspTime  = -1;
   firstFreqEspTime = -1;
   firstFreqRecvMs  = -1;
+  recordStartTime_s = 0;  // グラフ時間軸をリセット
+  recordEndTime_s   = 0;
   posSession = []; freqSession = [];
   posValues = []; velValues = []; velSmoothValues = []; freqValues = []; freqWValues = [];
   posTimeValues = []; freqTimeValues = [];
@@ -1531,7 +1571,7 @@ function buildCsv() {
       const f_hz = GOERTZEL_FREQ_LOW + b * GOERTZEL_FREQ_STEP;
       magHeaders.push(`mag_${f_hz.toFixed(0)}`);
     }
-    let out = 'elapsed_s,freq_t_s,pos_t_s,pos_m,vel_ms,freq_hz,amplitude,gap_ok,freq_w_hz,sidelobe_ratio,fwhm_hz,'
+    let out = 'elapsed_s,freq_t_s,pos_t_s,pos_m,vel_ms,freq_hz,mag_idx_max,amplitude,gap_ok,freq_w_hz,sidelobe_ratio,fwhm_hz,'
             + magHeaders.join(',') + '\n';
 
     const HALF_WIN = CSV_VEL_HALF_WIN;
@@ -1568,10 +1608,21 @@ function buildCsv() {
         mags.fill('');
       }
 
+      // mag 配列の最大値インデックスを計算（freq_hz検証用）
+      let magIdxMax = -1;
+      if (f.mag_q && f.mag_scale != null && f.mag_q.length > 0) {
+        let maxVal = f.mag_q[0];
+        for (let b = 1; b < f.mag_q.length; b++) {
+          if (f.mag_q[b] > maxVal) { maxVal = f.mag_q[b]; magIdxMax = b; }
+        }
+        magIdxMax = (magIdxMax < 0) ? 0 : magIdxMax;
+      }
+      const magIdxMaxStr = magIdxMax >= 0 ? (GOERTZEL_FREQ_LOW + magIdxMax * GOERTZEL_FREQ_STEP).toFixed(0) : '';
+
       const sr_str   = f.sidelobe_ratio != null ? f.sidelobe_ratio.toFixed(4) : '';
       const fwhm_str = f.fwhm_hz        != null ? f.fwhm_hz.toFixed(1)        : '';
       out += `${f.elapsed_s.toFixed(4)},${freq_t_s.toFixed(4)},${pos_t_s_str},${pos_m_str},${vel_ms_str},`
-           + `${f.freq_hz.toFixed(2)},${amp_str},${f.gap_ok},${freq_w_str},${sr_str},${fwhm_str},`
+           + `${f.freq_hz.toFixed(2)},${magIdxMaxStr},${amp_str},${f.gap_ok},${freq_w_str},${sr_str},${fwhm_str},`
            + mags.join(',') + '\n';
     }
     return out;
