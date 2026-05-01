@@ -239,7 +239,7 @@
       <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
         <strong style="color:var(--accent); font-size:0.85rem;">SAMPLING_TAIL 校正</strong>
         <span style="color:var(--dim); font-size:0.72rem;">
-          Stop 後に τ を ±80 ms スキャンして R² 最大点を推奨値として表示
+          Stop 後に τ を ±200 ms スキャンして R² 最大点を推奨値として表示
         </span>
       </div>
       <div style="display:flex; flex-wrap:wrap; gap:18px; align-items:center;">
@@ -257,6 +257,10 @@
         <button id="btnApplyCal" class="btn-start"
           style="padding:3px 14px; font-size:0.78rem; min-width:0;">適用</button>
         <span id="calApplied" style="color:#4caf50; display:none;">✓ 適用済み</span>
+        <label style="margin-left:auto; display:flex; align-items:center; gap:6px; cursor:pointer; font-size:0.78rem; color:var(--dim); white-space:nowrap;">
+          <input type="checkbox" id="autoApplyCal" checked style="accent-color:var(--accent2);">
+          Auto-apply τ
+        </label>
       </div>
     </div>
   </div>
@@ -1408,6 +1412,14 @@ function showCalibResult(cal) {
     (cal.slopeAfter  / cal.theory).toFixed(4);
   document.getElementById('calApplied').style.display = 'none';
   document.getElementById('calibPanel').style.display = 'block';
+
+  // Auto-apply τ if checkbox is checked
+  if (document.getElementById('autoApplyCal').checked) {
+    samplingTailAdjMs = cal.tauOpt;
+    document.getElementById('calApplied').style.display = 'inline';
+    log(`✓ Auto-applied τ = ${cal.tauOpt.toFixed(1)} ms (τ_opt from ±200ms calibration)`);
+    drawScatter();  // 散布図を τ適用後の状態で再描画
+  }
 }
 
 // ═══════════════════════════════════════════════
@@ -1421,6 +1433,7 @@ function startRecording() {
   lastNotifyTime  = 0;
   lastNotifyPos   = 0;
   bleStallCount   = 0;
+  samplingTailAdjMs = 0;  // リセット：前回の τ_opt を消す
   log('Recording started.');
   // posBurstCarry / lastSampleEndTime は意図的にリセットしない。
   // 接続中は 100Hz バースト decoder が連続動作しており、録画開始は
@@ -1430,6 +1443,8 @@ function startRecording() {
   firstFreqEspTime = -1;
   firstFreqRecvMs  = -1;
   ampThresholdIsAuto = true;  // 録画開始でオートモードに戻す
+  document.getElementById('calApplied').style.display = 'none';  // 「適用済み」インジケータをクリア
+  document.getElementById('calibPanel').style.display = 'none';   // 校正パネルを非表示
   samplerTimerId   = setInterval(sampleTick, SAMPLE_INTERVAL_MS);
   updateButtonStates();
 }
