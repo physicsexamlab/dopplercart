@@ -405,7 +405,7 @@ const GOERTZEL_FREQ_STEP = 1.0;    // Arduino FREQ_STEP と一致させること
 // sidelobe_ratio = (ピーク周辺 ±QUALITY_EXCLUSION_HZ 外の最大値) / ピーク値
 // 0.50 未満: Good, 0.75 未満: Marginal, 0.75 以上: Poor（multipath 支配的）
 const QUALITY_SIDELOBE_MAX  = 0.75;   // Poor 判定の上限
-const QUALITY_EXCLUSION_HZ  = 10.0;   // ピーク周辺の排他ゾーン半幅 [Hz]
+const QUALITY_EXCLUSION_HZ  = 20.0;   // ピーク周辺の排他ゾーン半幅 [Hz] (Hann window FWHM~40Hz対応)
 const N_BINS             = Math.round((GOERTZEL_FREQ_HIGH - GOERTZEL_FREQ_LOW) / GOERTZEL_FREQ_STEP) + 1;  // 81
 
 // バイナリパケット形式（doppler-cart-n800-spectrum.ino と一致させること）
@@ -1347,20 +1347,29 @@ function calibrateSamplingTail() {
   let bestTau = 0, bestR2 = -1, bestSlope = 0;
   let curR2 = 0,   curSlope = 0;
 
+  // 振幅の中央値を基準に adaptive threshold を設定
+  const validAmps = freqSession
+    .filter(f => f.amplitude != null && f.amplitude > 0)
+    .map(f => f.amplitude)
+    .sort((a, b) => a - b);
+  const ampMedian = validAmps.length > 0 ? validAmps[Math.floor(validAmps.length/2)] : 400;
+  const ampThresh = Math.max(ampMedian * 0.6, 200);  // 中央値の 60% または 200, どちらか大きい方
+
   for (let tau = -200; tau <= 200; tau += 2) {
     let sumX=0, sumY=0, sumXX=0, sumXY=0, sumYY=0, nPts=0;
+    const vels = [];
 
     for (let i = 0; i < freqSession.length; i++) {
       const f = freqSession[i];
-      if (f.freq_hz <= 0 || (f.amplitude ?? 0) < 300) continue;
-      if (qualityFilterEnabled && (f.sidelobe_ratio ?? 0) >= QUALITY_SIDELOBE_MAX) continue;
-      // τ だけシフトした時刻で pos を探す
+      if (f.freq_hz <= 0 || (f.amplitude ?? 0) < ampThresh) continue;
+      if ((f.sidelobe_ratio ?? 0) > 0.85) continue;  // Hann window tail を超える品質不良は除外
       const k = nearestPosIdx(f.t_true_ms + tau);
       if (k < 0) continue;
       const v = posCentralDiffVel(k, HALF);
       if (v === null || Math.abs(v) < 0.02 || Math.abs(v) > 2.5) continue;
       const fw = computeWeightedFreq(freqSession, i, FREQ_W_HALF_WIN);
       if (fw <= 0) continue;
+      vels.push(v);
       const df = fw - f0;
       sumX += v; sumY += df; sumXX += v*v; sumXY += v*df; sumYY += df*df; nPts++;
     }
