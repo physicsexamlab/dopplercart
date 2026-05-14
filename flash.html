@@ -1,0 +1,106 @@
+<!--
+  Physics Exam Lab - Doppler Cart Firmware Installer
+  Copyright (c) 2026 一般社団法人 国際物理オリンピック2023記念協会
+  Licensed under the Creative Commons BY-NC 4.0 International License.
+  See https://creativecommons.org/licenses/by-nc/4.0/
+-->
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Doppler Cart — ファームウェア書き込み</title>
+<script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+<style>
+  :root {
+    --bg:     #f0f4f8;
+    --panel:  #ffffff;
+    --border: #bdd0e4;
+    --text:   #1a2b3c;
+    --dim:    #6b8099;
+    --blue:   #0077cc;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: 'Helvetica Neue', Arial, 'Hiragino Sans', 'Meiryo', sans-serif;
+    min-height: 100vh; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; padding: 40px 20px;
+  }
+  .card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-top: 3px solid var(--blue);
+    border-radius: 8px; padding: 40px 48px;
+    max-width: 540px; width: 100%;
+    display: flex; flex-direction: column; gap: 24px;
+  }
+  h1 {
+    font-size: 1.3rem; font-weight: 700; color: var(--blue);
+    letter-spacing: 0.04em;
+  }
+  h1 span { color: var(--text); font-weight: 300; }
+  .description { font-size: 0.9rem; line-height: 1.75; color: var(--text); }
+  .steps {
+    font-size: 0.85rem; line-height: 1.8; color: var(--dim);
+    padding-left: 1.2em;
+  }
+  .steps li { margin-bottom: 2px; }
+  .install-row {
+    display: flex; align-items: center; gap: 16px;
+    padding: 20px 0; border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+  }
+  esp-web-install-button {
+    --esp-tools-button-color: var(--blue);
+    --esp-tools-button-border-color: var(--blue);
+  }
+  .install-label { font-size: 0.85rem; color: var(--dim); }
+  .note {
+    font-size: 0.75rem; color: var(--dim); line-height: 1.7;
+  }
+  .note a { color: var(--blue); }
+  footer {
+    margin-top: 32px; font-size: 0.65rem; color: var(--dim); text-align: center;
+  }
+  footer a { color: var(--dim); }
+</style>
+</head>
+<body>
+
+<div class="card">
+  <h1>Doppler Cart <span>ファームウェア書き込み</span></h1>
+
+  <p class="description">
+    Arduino Nano ESP32 に Doppler Cart のファームウェアを書き込みます。<br>
+    書き込みには <strong>Google Chrome</strong>（または Edge）が必要です。
+  </p>
+
+  <ol class="steps">
+    <li>Arduino Nano ESP32 を USB ケーブルで PC に接続する</li>
+    <li>下の「書き込む」ボタンをクリックする</li>
+    <li>表示されるポート選択ダイアログで該当ポートを選択する</li>
+    <li>書き込みが完了したら USB を抜き差しして再起動する</li>
+  </ol>
+
+  <div class="install-row">
+    <esp-web-install-button manifest="firmware/manifest.json">
+      <button slot="activate">書き込む</button>
+    </esp-web-install-button>
+    <span class="install-label">Arduino Nano ESP32 (ESP32-S3)</span>
+  </div>
+
+  <p class="note">
+    ※ ブラウザが「シリアルポートへのアクセス」の許可を求めます。「許可」を選択してください。<br>
+    ※ 書き込み中はボードを抜かないでください。<br>
+    ※ Safari・Firefox には Web Serial API が実装されていないため使用できません。
+  </p>
+</div>
+
+<footer>
+  Physics Exam Lab - Doppler Cart &nbsp;|&nbsp;
+  Copyright &copy; 2026 一般社団法人 国際物理オリンピック2023記念協会 &nbsp;|&nbsp;
+  <a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank" rel="noopener">CC BY-NC 4.0</a>
+</footer>
+
+</body>
+</html>
