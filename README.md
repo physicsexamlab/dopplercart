@@ -38,9 +38,37 @@ $$\Delta f \approx \frac{f_0}{v_s} \, v$$
 
 ### 1. ファームウェアの書き込み（初回のみ）
 
-Chrome で以下の URL を開き、Arduino Nano ESP32 を USB 接続して「書き込む」ボタンを押します。
+**https://physicsexamlab.github.io/dopplercart/flash.html** を Chrome で開きます。
 
-**https://physicsexamlab.github.io/dopplercart/flash.html**
+Arduino Nano ESP32 は USB-UART ブリッジを持たず ESP32-S3 のネイティブ USB を直接使う構造のため、`esptool` の自動 reset が効きません。**ユーザが手動で ROM ブートローダに突入させる必要があります**。
+
+#### 用意するもの
+
+- USB-C データ通信対応ケーブル
+- ジャンパ線 1 本（B0 ピンと GND ピンの短絡用）
+- Arduino IDE 等、シリアルポートを使う他アプリは**全て終了**しておくこと
+
+#### 手順
+
+1. **USB ケーブルをボードから抜く**
+2. **ジャンパ線で B0 ピンと GND ピンを短絡**させる
+3. **B0–GND を短絡したまま、USB ケーブルを差す**
+4. **3 秒待つ**（PC が USB を再認識する時間）
+5. **ジャンパ線を外す**（B0 を解放）
+6. **ブラウザの flash.html で「書き込む」をクリック**
+7. ポート選択ダイアログで、**新しく現れた短い名前のポート**（例：`cu.usbmodem101`）を選ぶ
+   - 通常モード時の `cu.usbmodemE4B063…` のような長い MAC アドレス由来の名前ではなく、ROM ブートローダ時に現れる短い名前のポートを選ぶこと
+8. 「Connect」をクリック → 書き込みが始まる
+9. **"Installation complete!"** が表示されれば成功
+
+#### ROM ブートローダに入れたかの確認
+
+- **macOS / Linux：** Terminal で `ls /dev/cu.*` （macOS）または `ls /dev/ttyACM*` （Linux）を実行し、新しい短い名前のポートが現れているか確認
+- **Windows：** デバイスマネージャ → ポート（COM と LPT） に新しい COM 番号が現れているか確認
+
+#### うまくいかない場合
+
+ESP Web Tools が動かない場合は、Arduino IDE で `Arduino/doppler-cart/doppler-cart.ino` を直接ビルド・アップロードしてください。Arduino IDE はブートローダ突入を自動で処理します。
 
 ### 2. 計測アプリの起動
 
