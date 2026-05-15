@@ -109,6 +109,12 @@ firmware/
 
 ---
 
+## 更新履歴
+
+- **2026-05-15**: Stage 2a-r1 で導入していた DMA ドロップ検出 (drop_delta>0 → theta_valid=false) を撤回。HTML 側の tracking_break を誘発して高 v 域フレームを連続的に喪失させ、Doppler slope を圧縮していたため。撤回後、slope 回復率 70%→89%、R² 0.64→0.92 を実測確認（静止精度は維持）。
+
+---
+
 ## ライセンス
 
 Copyright (c) 2026 一般社団法人 国際物理オリンピック2023記念協会

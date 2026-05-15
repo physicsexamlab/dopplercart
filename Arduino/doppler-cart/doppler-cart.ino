@@ -1,8 +1,8 @@
 /*
-  doppler-cart-iq.ino  ── Stage 2a (Stage 2a-r1: drop-aware)
+  doppler-cart.ino  ── Stage 2a (drop-aware 撤回版, 2026-05-15)
   ESP32 (Arduino Nano ESP32) I/Q Goertzel 位相 Doppler センサ — 2 kHz 版
 
-  【Stage 0(現行)からの変更点】
+  【Stage 0(analogRead 版)からの変更点】
     ・ADC取得を analogRead × 800 から adc_continuous_* (DMA) + リングバッファに変更
     ・サンプリング周波数 FS = 16000 Hz をハードウェアで厳密に保証
     ・キャリア位相補正に dt_us(実測) ではなく DT_BLOCK = 50ms 定数を使用
@@ -12,21 +12,21 @@
     ・起動時の DMA 損失を防ぐため max_store_buf_size を増量
     ・シリアルから 'd' でブロックダンプ機能を追加
 
-  【Stage 2a-r1 (2026-05-11) ドロップ耐性】
-    ・total_dropped / total_unexpected を毎ブロックで前回値と比較
-    ・ドロップ発生時(=サンプル列に時間ギャップ)は theta_valid=false + freq_hz=-1
-      ── theta_prev と次の theta_raw が 50ms 離れていない位相差分の破綻を予防
-    ・dt_us フィールドの上位 16bit にブロック内累積 drop_delta を埋め込み、
-      HTML 側で motion 中のドロップ有無を可視化可能にする (下位 16bit は dt_us & 0xFFFF)
+  【Stage 2a-r1 撤回 (2026-05-15)】
+    Stage 2a-r1 (drop-aware) で導入した「drop_delta>0 → theta_valid=false +
+    freq_hz=-1」のブロック無効化は、HTML 側の tracking_break を誘発して 2-5
+    frame 連続 null クラスタを作り、高 v 域の高レバレッジ点を喪失させ Doppler
+    slope を圧縮していた (5/15 観測, slope 4.10 vs 5/13 5.50)。drop 中も
+    freq_hz を出力し、HTML 側 PLL unwrap + outlier ガード (FREQ_GAP_GATE_HZ=8)
+    で処理する元の方針 (pre-r1 Stage 2a) に戻した。
 
   【BLEパケット形式 (20バイト, little-endian)】
     offset  size  type     field
     0       4     float32  t_esp_s    (窓中点 [秒], 決定論的計算)
-    4       4     float32  freq_hz    (-1.0 = 無効, ドロップ or 振幅不足)
+    4       4     float32  freq_hz    (-1.0 = 無効, 振幅不足のみ)
     8       4     float32  amplitude
-    12      4     float32  theta_raw  (常に有効, ドロップ後でも値を持つ)
-    16      4     uint32   diag       (下位16bit = dt_us mod 65536,
-                                       上位16bit = drop_delta このブロック)
+    12      4     float32  theta_raw  (常に有効)
+    16      4     uint32   dt_us      (前回 notify からの実測経過 µs, 診断用)
 
   【BLE設定 (Stage 0 と完全互換)】
     Service:        Environmental Sensing (0x181A)
@@ -104,8 +104,6 @@ static bool     theta_valid     = false;
 static uint32_t block_count     = 0;
 static uint32_t start_us        = 0;   // 起動時刻基準 (t_esp_s 計算用)
 static uint32_t prev_notify_us  = 0;   // 前回 notify 時刻 (dt_us 計算用)
-static uint32_t prev_dropped_total    = 0;  // 前ブロック時点での total_dropped (drop_delta 計算用)
-static uint32_t prev_unexpected_total = 0;  // 同 total_unexpected
 
 // 起動時に1回だけ計算するキャリア位相補正定数
 static float    DTHETA_CARRIER  = 0.0f;
@@ -304,23 +302,13 @@ void loop() {
   const float amplitude = sqrtf(re0 * re0 + im0 * im0) / (N / 2.0f);
   const float theta_raw = atan2f(im0, re0);
 
-  // ── 8a. DMA ドロップ検出 ─────────────────────────
-  // 前ブロック処理時点からの drop_delta を計算。drop が発生していれば、
-  // theta_prev (前ブロック中心) と theta_raw (本ブロック中心) は
-  // 実時間で 50ms ちょうど離れておらず、位相差分式が破綻する。
-  // → theta_valid=false とし、本ブロックでは freq_hz=-1 を返す
-  //   (theta_raw 自体は記録のため packet に含めて送る)
-  const uint32_t cur_dropped_total    = total_dropped;
-  const uint32_t cur_unexpected_total = total_unexpected;
-  const uint32_t drop_delta = (cur_dropped_total    - prev_dropped_total)
-                            + (cur_unexpected_total - prev_unexpected_total);
-  prev_dropped_total    = cur_dropped_total;
-  prev_unexpected_total = cur_unexpected_total;
-  if (drop_delta > 0) {
-    theta_valid = false;
-  }
-
-  // ── 8b. I/Q 位相差分で周波数推定 (DT_BLOCK 固定) ──
+  // ── 8. I/Q 位相差分で周波数推定 (DT_BLOCK 固定) ──
+  // 注: Stage 2a-r1 で導入した DMA ドロップ検出 (drop_delta>0 → theta_valid=false)
+  //     は 2026-05-15 に撤回した。BLE バーストや CPU 負荷で発生する稀な drop に
+  //     対して、HTML 側 tracking_break (polyBuffer flush + amp≥ENTRY 再エントリー)
+  //     を誘発し、高 v 域フレームを 2-5 連続で失って Doppler slope を圧縮していた。
+  //     drop 中も freq_hz は出力し、HTML 側の PLL unwrap・amp ゲート・outlier
+  //     ガード (FREQ_GAP_GATE_HZ=8) で処理する方が高レバレッジ点を保持できる。
   float    freq_hz   = -1.0f;
 
   if (pp >= MIN_PP && amplitude >= AMPLITUDE_MIN) {
@@ -342,15 +330,12 @@ void loop() {
   }
 
   // ── 9. dt_us = 前回 notify からの実測経過時間 ────
-  // packet の 16-19 バイト目に下位16bit=dt_us, 上位16bit=drop_delta を埋め込む
-  // (dt_us は <= 約 65 ms の範囲なので 16 bit に収まる, drop_delta が
-  //  64K を超える病的ケースは飽和して送る)
+  // packet の 16-19 バイト目は dt_us (uint32 µs)。drop_delta の上位 16bit 埋め込みは
+  // Stage 2a-r1 撤回に伴い廃止。dt_us は 50ms 公称 (≈ 50000 µs, 0xC350)。
   const uint32_t now_us   = micros();
   const uint32_t dt_us_val = now_us - prev_notify_us;
   prev_notify_us = now_us;
-  const uint16_t dt_us_low = (uint16_t)(dt_us_val > 0xFFFF ? 0xFFFF : dt_us_val);
-  const uint16_t drop_hi   = (uint16_t)(drop_delta > 0xFFFF ? 0xFFFF : drop_delta);
-  const uint32_t diag_word = ((uint32_t)drop_hi << 16) | (uint32_t)dt_us_low;
+  const uint32_t diag_word = dt_us_val;
 
   // ── 10. パケット組み立て & BLE notify ────────────
   memcpy(&packet[0],  &t_esp_s,    4);
@@ -377,9 +362,9 @@ void loop() {
   }
 
 #if DEBUG_SERIAL
-  Serial.printf("blk=%lu t=%.4f freq=%.2f amp=%.4f theta=%.4f dt_us=%lu drop_d=%lu drop_tot=%lu\n",
+  Serial.printf("blk=%lu t=%.4f freq=%.2f amp=%.4f theta=%.4f dt_us=%lu drop_tot=%lu\n",
                 (unsigned long)block_count, t_esp_s, freq_hz, amplitude,
                 theta_raw, (unsigned long)dt_us_val,
-                (unsigned long)drop_delta, (unsigned long)total_dropped);
+                (unsigned long)total_dropped);
 #endif
 }
