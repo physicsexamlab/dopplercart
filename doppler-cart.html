@@ -1509,7 +1509,14 @@ document.getElementById('btnDownload').addEventListener('click', () => {
   const url  = URL.createObjectURL(blob);
   const a    = document.createElement('a');
   a.href     = url;
-  a.download = `doppler_iq_${new Date().toISOString().replace(/[:.]/g,'-')}.csv`;
+  // ファイル名はローカル時刻で YYYY-MM-DD_HHMMSS（UTC の ISO 形式は
+  // 日本時間と 9 時間ずれて分かりにくいため。"_iq_" は IQ 法導入時の
+  // 旧版との区別用で現在は不要なので削除）
+  const _d = new Date();
+  const _p = n => String(n).padStart(2, '0');
+  const _stamp = `${_d.getFullYear()}-${_p(_d.getMonth() + 1)}-${_p(_d.getDate())}`
+               + `_${_p(_d.getHours())}${_p(_d.getMinutes())}${_p(_d.getSeconds())}`;
+  a.download = `doppler_${_stamp}.csv`;
   a.click();
   URL.revokeObjectURL(url);
 });
