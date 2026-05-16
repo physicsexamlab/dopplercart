@@ -28,6 +28,10 @@
     シリアルへ名前を出力するので、各台に同じ4文字のラベルを貼って運用
     する。HTML 側は service UUID フィルタのみで名前に依存しないため変更
     不要。
+    なお NimBLE 2.5.0 は init() の GAP 名を広告へ自動挿入しないため、
+    enableScanResponse(true) の後に pAdv->setName() を明示的に呼び、
+    完全名をスキャンレスポンスへ載せる。これを行わないと Chrome の
+    選択ダイアログには OS キャッシュの旧名(接尾辞なし)が表示される。
 
   【BLEパケット形式 (20バイト, little-endian)】
     offset  size  type     field
@@ -248,6 +252,10 @@ void setup() {
   NimBLEAdvertising* pAdv = NimBLEDevice::getAdvertising();
   pAdv->addServiceUUID(SERVICE_UUID);
   pAdv->enableScanResponse(true);
+  // enableScanResponse(true) を先に呼ぶことで setName() が名前を
+  // スキャンレスポンス(31バイト)へ格納する。広告本体は flags+UUID で
+  // 手狭なため、ここに入れないと名前が切り詰められる/広告されない。
+  pAdv->setName(devName);
   pAdv->start();
   Serial.printf("BLE started. name=\"%s\"  f0=%.0f Hz  packet=%d bytes\n",
                 devName, F0, PACKET_TOTAL_BYTES);
