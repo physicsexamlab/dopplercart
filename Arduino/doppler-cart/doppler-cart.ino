@@ -20,6 +20,15 @@
     freq_hz を出力し、HTML 側 PLL unwrap + outlier ガード (FREQ_GAP_GATE_HZ=8)
     で処理する元の方針 (pre-r1 Stage 2a) に戻した。
 
+  【デバイス名の一意化 (2026-05-17)】
+    BLE デバイス名を固定 "Doppler IQ Sensor" から、Bluetooth MAC 末尾 2
+    バイトを付加した "Doppler IQ Sensor XXXX" に変更。同一教室内で複数台
+    を運用しても Web Bluetooth の選択ダイアログで各台を区別できるように
+    する。XXXX は基板固有(efuse 由来)で再起動しても不変。起動時に
+    シリアルへ名前を出力するので、各台に同じ4文字のラベルを貼って運用
+    する。HTML 側は service UUID フィルタのみで名前に依存しないため変更
+    不要。
+
   【BLEパケット形式 (20バイト, little-endian)】
     offset  size  type     field
     0       4     float32  t_esp_s    (窓中点 [秒], 決定論的計算)
@@ -31,7 +40,7 @@
   【BLE設定 (Stage 0 と完全互換)】
     Service:        Environmental Sensing (0x181A)
     Characteristic: Analog               (0x2A58), Notify
-    Device name:    "Doppler IQ Sensor"
+    Device name:    "Doppler IQ Sensor XXXX"  (XXXX = BT MAC 末尾2バイト)
 
   【動作環境】
     - Arduino IDE
@@ -49,6 +58,7 @@
 
 extern "C" {
   #include "esp_adc/adc_continuous.h"
+  #include "esp_mac.h"
 }
 
 // ─── ユーザ設定 ───────────────────────────────────────
@@ -219,8 +229,13 @@ void setup() {
   Serial.printf("DT_BLOCK=%.6f s  DTHETA_CARRIER=%.6f rad\n",
                 DT_BLOCK, DTHETA_CARRIER);
 
-  // BLE 初期化
-  NimBLEDevice::init("Doppler IQ Sensor");
+  // BLE 初期化 — デバイス名に BT MAC 末尾2バイトを付加し教室内で一意化
+  uint8_t bleMac[6];
+  esp_read_mac(bleMac, ESP_MAC_BT);
+  char devName[28];
+  snprintf(devName, sizeof(devName), "Doppler IQ Sensor %02X%02X",
+           bleMac[4], bleMac[5]);
+  NimBLEDevice::init(devName);
   NimBLEDevice::setPower(ESP_PWR_LVL_P9);
   NimBLEDevice::setMTU(247);
   pServer = NimBLEDevice::createServer();
@@ -234,7 +249,8 @@ void setup() {
   pAdv->addServiceUUID(SERVICE_UUID);
   pAdv->enableScanResponse(true);
   pAdv->start();
-  Serial.printf("BLE started. f0=%.0f Hz  packet=%d bytes\n", F0, PACKET_TOTAL_BYTES);
+  Serial.printf("BLE started. name=\"%s\"  f0=%.0f Hz  packet=%d bytes\n",
+                devName, F0, PACKET_TOTAL_BYTES);
 
   // ADC 連続サンプリング開始
   if (!setup_adc_continuous()) {
