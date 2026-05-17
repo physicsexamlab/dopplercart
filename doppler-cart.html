@@ -157,7 +157,7 @@
 <main>
   <div class="controls">
     <button class="btn-connect-cart" id="btnConnectCart">Connect Smart Cart</button>
-    <button class="btn-connect-freq" id="btnConnectFreq">Connect IQ Sensor</button>
+    <button class="btn-connect-freq" id="btnConnectFreq">Connect Freq Sensor</button>
     <button class="btn-start" id="btnStart" disabled>Record</button>
     <button class="btn-stop"  id="btnStop"  disabled>Stop</button>
     <button class="btn-reset" id="btnReset" disabled>Reset</button>
@@ -1231,11 +1231,11 @@ function setCartStatus(text, connected = false) {
 async function connectFreqSensor() {
   try {
     setFreqStatus('SCANNING...');
-    log('Requesting IQ Sensor ...');
+    log('Requesting Freq Sensor ...');
     freqDevice = await navigator.bluetooth.requestDevice({
       filters: [{ services: ['environmental_sensing'] }]
     });
-    log(`IQ device: ${freqDevice.name}`);
+    log(`Freq device: ${freqDevice.name}`);
     freqDevice.addEventListener('gattserverdisconnected', onFreqDisconnected);
 
     const server  = await freqDevice.gatt.connect();
@@ -1243,14 +1243,14 @@ async function connectFreqSensor() {
     freqChar      = await service.getCharacteristic('analog');
     await freqChar.startNotifications();
     freqChar.addEventListener('characteristicvaluechanged', onFreqNotify);
-    log('IQ sensor ready.');
+    log('Freq sensor ready.');
 
     isFreqConnected = true;
     setFreqStatus('CONNECTED: ' + freqDevice.name, true);
     updateButtonStates();
   } catch (e) {
     console.error(e);
-    log('IQ Sensor ERROR: ' + e.message);
+    log('Freq Sensor ERROR: ' + e.message);
     setFreqStatus('ERROR');
   }
 }
