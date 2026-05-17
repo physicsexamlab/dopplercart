@@ -28,10 +28,18 @@
     シリアルへ名前を出力するので、各台に同じ4文字のラベルを貼って運用
     する。HTML 側は service UUID フィルタのみで名前に依存しないため変更
     不要。
-    なお NimBLE 2.5.0 は init() の GAP 名を広告へ自動挿入しないため、
-    enableScanResponse(true) の後に pAdv->setName() を明示的に呼び、
-    完全名をスキャンレスポンスへ載せる。これを行わないと Chrome の
-    選択ダイアログには OS キャッシュの旧名(接尾辞なし)が表示される。
+    なお NimBLE 2.5.0 は init() の GAP 名を広告へ自動挿入しない。
+    さらに macOS CoreBluetooth は名前を scan response のみに置いても
+    旧 GAP 名のキャッシュを優先し、Mac 再起動でも消えない。よって
+    Complete Local Name は広告本体(primary PDU)へ明示的に載せ、
+    16bit Service UUID を scan response へ退避する構成にした
+    (setAdvertisementData/setScanResponseData を明示使用)。
+    加えて NimBLE on ESP32-S3 は既定で非解決ランダムアドレスを使う。
+    旧ファームでそのランダムアドレスに macOS が旧名を紐づけて永続
+    キャッシュすると、名前を直しても再起動でも表示が更新されない。
+    setOwnAddrType(BLE_OWN_ADDR_PUBLIC) でチップ固有の公開 MAC を
+    広告アドレスにし、OS にキャッシュの無い「新規デバイス」として
+    名前を取得し直させる。起動時シリアルに addr= も出力して検証可能。
 
   【BLEパケット形式 (20バイト, little-endian)】
     offset  size  type     field
@@ -64,6 +72,14 @@ extern "C" {
   #include "esp_adc/adc_continuous.h"
   #include "esp_mac.h"
 }
+
+// ─── ファームウェア識別 ───────────────────────────────
+// 起動時シリアルに一意の刻印を出力し、書き込んだ版が正しいことを
+// 目視確認できるようにする。FW_REV は変更ごとに手で更新。
+// __DATE__/__TIME__ は再コンパイルの度に必ず変わるので、
+// 「いまコンパイルした版が動いているか」を確実に判定できる。
+#define FW_REV               "r6-pubaddr-namefix"
+#define FW_BUILD             __DATE__ " " __TIME__
 
 // ─── ユーザ設定 ───────────────────────────────────────
 #define MIC_PIN              A0
@@ -221,6 +237,10 @@ void setup() {
   Serial.begin(115200);
   delay(3000);
   Serial.println("=== doppler-cart Stage 2a (DMA + NimBLE 2.5.0) ===");
+  Serial.println("####################################################");
+  Serial.printf ("### FW_REV=%s\n", FW_REV);
+  Serial.printf ("### BUILD =%s\n", FW_BUILD);
+  Serial.println("####################################################");
 
   // Hann 窓
   for (int i = 0; i < N; i++) {
@@ -240,6 +260,13 @@ void setup() {
   snprintf(devName, sizeof(devName), "Doppler IQ Sensor %02X%02X",
            bleMac[4], bleMac[5]);
   NimBLEDevice::init(devName);
+  // 公開アドレス(チップ固有の BT MAC)で広告させる。NimBLE on ESP32-S3
+  // は既定で非解決ランダムアドレスを生成するため、旧ファーム時代に
+  // macOS がそのランダムアドレスへ紐づけて保存した旧名キャッシュが
+  // 再起動でも消えず、Chrome 選択ダイアログに接尾辞が出ない原因になる。
+  // 公開アドレスは基板固有かつ macOS が未キャッシュなので、OS は名前を
+  // 取得し直し、教室運用でもアドレスが安定一意になる。
+  NimBLEDevice::setOwnAddrType(BLE_OWN_ADDR_PUBLIC);
   NimBLEDevice::setPower(ESP_PWR_LVL_P9);
   NimBLEDevice::setMTU(247);
   pServer = NimBLEDevice::createServer();
@@ -250,15 +277,25 @@ void setup() {
   );
   pService->start();
   NimBLEAdvertising* pAdv = NimBLEDevice::getAdvertising();
-  pAdv->addServiceUUID(SERVICE_UUID);
-  pAdv->enableScanResponse(true);
-  // enableScanResponse(true) を先に呼ぶことで setName() が名前を
-  // スキャンレスポンス(31バイト)へ格納する。広告本体は flags+UUID で
-  // 手狭なため、ここに入れないと名前が切り詰められる/広告されない。
-  pAdv->setName(devName);
+  // Complete Local Name を「広告本体(primary PDU)」に載せる。
+  // scan response だけに名前を置くと macOS CoreBluetooth は旧 GAP 名の
+  // キャッシュを優先表示し、Chrome の選択ダイアログに接尾辞が出ない。
+  // primary PDU に Local Name があれば各 central はそれを名前に採用する。
+  //   flags(3) + Complete Name "Doppler IQ Sensor XXXX"(2+22=24) = 27 / 31
+  // 16bit Service UUID(4B) は scan response 側へ退避（HTML の service
+  // フィルタは scan response でも一致するため動作に影響なし）。
+  NimBLEAdvertisementData advData;
+  advData.setFlags(BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP);
+  advData.setName(devName);
+  NimBLEAdvertisementData scanData;
+  scanData.addServiceUUID(SERVICE_UUID);
+  pAdv->enableScanResponse(true);          // scannable 化（m_advDataSet をリセット）
+  pAdv->setScanResponseData(scanData);
+  pAdv->setAdvertisementData(advData);     // 最後に呼ぶ（m_advDataSet=true を確定）
   pAdv->start();
-  Serial.printf("BLE started. name=\"%s\"  f0=%.0f Hz  packet=%d bytes\n",
-                devName, F0, PACKET_TOTAL_BYTES);
+  Serial.printf("BLE started. name=\"%s\"  addr=%s  f0=%.0f Hz  packet=%d bytes\n",
+                devName, NimBLEDevice::getAddress().toString().c_str(),
+                F0, PACKET_TOTAL_BYTES);
 
   // ADC 連続サンプリング開始
   if (!setup_adc_continuous()) {
