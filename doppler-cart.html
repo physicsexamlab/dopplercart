@@ -996,8 +996,8 @@ function updateAmpIndicator(amplitude) {
   let text, color;
   let hint;
   if (amplitude >= 400)      { text = 'GOOD'; color = '#008855'; hint = ''; }
-  else if (amplitude >= 200) { text = 'LOW';  color = '#b86e00'; hint = '→ スピーカーの音量を上げてください'; }
-  else                       { text = 'POOR'; color = '#d42045'; hint = '→ スピーカーの音量を上げてください'; }
+  else if (amplitude >= 200) { text = 'LOW';  color = '#b86e00'; hint = ''; }
+  else                       { text = 'POOR'; color = '#d42045'; hint = ''; }
   if (badge)  { badge.textContent = text; badge.style.color = color; }
   if (detail) { detail.textContent = hint; detail.style.color = color; }
 }
@@ -1081,7 +1081,7 @@ function drawScatter() {
   let first = true;
   for (let i = -200; i <= 200; i++) {
     const v = i * V_MAX / 200;
-    const df = f0_disp * v / VS;
+    const df = -f0_disp * v / VS;
     if (Math.abs(df) > DF_MAX * 1.1) { first = true; continue; }
     const x = toX(v), y = toY(df);
     first ? ctxScatter.moveTo(x, y) : ctxScatter.lineTo(x, y);
@@ -1114,7 +1114,7 @@ function drawScatter() {
   // 理論式テキストのみ（fit / R² は教育上、生徒が自分で計算する）
   ctxScatter.font = '10px "Share Tech Mono",monospace'; ctxScatter.textAlign='left';
   ctxScatter.fillStyle='#222';
-  ctxScatter.fillText(`理論 (低速近似): Δf = f₀·v/vₛ  f₀=${f0_disp.toFixed(2)} Hz  vₛ=343 m/s`, PAD_L+6, PAD_T+14);
+  ctxScatter.fillText(`理論 (低速近似): Δf = -f₀·v/vₛ  f₀=${f0_disp.toFixed(2)} Hz  vₛ=343 m/s`, PAD_L+6, PAD_T+14);
 
   const infoEl = document.getElementById('scatterInfo');
   if (infoEl) {
