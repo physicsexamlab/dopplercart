@@ -203,7 +203,7 @@
             <div class="stat-value" id="sFRefAmp" style="font-size:1.05rem;">—</div>
           </div>
           <div class="stat-card" id="qualityBar" style="border-left:3px solid var(--dim);">
-            <div class="stat-label">信号品質</div>
+            <div class="stat-label">音の受信</div>
             <div class="stat-value" style="font-size:0.95rem; display:flex; align-items:baseline; gap:8px; flex-wrap:wrap;">
               <span id="sQualityBadge" style="font-weight:700; color:var(--dim);">—</span>
               <span id="sQualityDetail" style="font-family:'Exo 2',sans-serif; font-weight:300; font-size:0.72rem; color:var(--dim);"></span>
@@ -371,6 +371,19 @@
           let firstFreqEspTime = -1;
           let firstFreqRecvMs  = -1;
           
+          // ── 2026-08-13 改訂: θ-回帰は「出力」ではなく「外れ値検出器」になった ──
+          //   グラフ・散布図・CSV・数値表示に出すのは firmware の生 freq_hz。
+          //   freq_clean は FREQ_GAP_GATE_HZ の整合ガードを回すためだけに計算する。
+          //   根拠 (8/13 の 10 走行 + 8/12 の 4 走行、HANDOFF_2026-08-13.md):
+          //     回収率 (= 348.3 / 見かけ音速)  θ-回帰 0.961±0.019 / 生 0.972±0.040 /
+          //     生+ガード 0.980±0.018 (最悪 0.945)。
+          //     θ-回帰は傾きを 1-3% 系統的に削る。14 走行中 13 走行で符号が一貫 (p=0.0018)。
+          //     振幅で切っても・等速プラトーだけでも差が残るので、低振幅フレームや
+          //     加速区間のフィルタ由来ではない。
+          //   生の唯一の弱点が 1 フレーム脱落 (1040 フレームに 1 個) で、それは
+          //   下の整合ガードが捕まえる。両取りの構成。
+          //
+          // 以下は freq_clean（＝検出器の内部推定値）の生成についての元の説明。
           // freq_clean 生成（2026-05-13 改訂: 中央化窓 ±2 / 群遅延 ~0ms）
           //
           // 旧来の EMA-gate を置き換える理由:
@@ -396,10 +409,21 @@
           //   代償: ノイズ低減は √3 ≈ 1.7× (5-tap の √5 = 2.24× から軽量化)。
           //   group delay は 0ms のまま。表示は最新フレームから 1 frame (50ms) 遅れる。
           const FREQ_STARTUP_SKIP    = 5;      // 録画開始直後 N フレームを無効化（録画前 theta 汚染）
-          const FREQ_AMP_GATE_ENTRY  = 100.0;  // tracking_break 後に追跡再開する閾値 (高め=安全な再開)
-          const FREQ_AMP_GATE_HOLD   = 75.0;  // 既に tracking 中なら維持する閾値 (ヒステリシス)
-          // ターンアラウンド付近の単発 amp dip (multipath null) を
-          // 吸収して 150ms gap を防ぐ。PLL unwrap が dip 中も働く。
+          // 振幅ゲートは 2026-08-11 に無効化した (0.0 = 常に通過)。
+          //   旧値 ENTRY=100 / HOLD=75 で低振幅フレームを捨てていたが、静止音源の
+          //   振幅変調 対照実験 6 走行で「ゲートを外すと結果が良くなる」と判明した。
+          //   捨てられるのは振幅の谷 = 軌道の特定の場所に集中するので、欠測が
+          //   ランダムでなく傾きにバイアスを入れる。一方で残る散らばりは位相差の
+          //   telescoping により平均・回帰から消える (10s 走行で |mean| ≤ 0.02 Hz)。
+          //   10s 走行の傾き誤差 [m/s]  ゲート有り -> 無し:
+          //       B 0.0058 -> 0.0030   C 0.0016 -> 0.0007
+          //       D 0.0010 -> 0.0007   F 0.0089 -> 0.0028   (E 同値, A 同値)
+          //   6 走行中 5 走行で改善。瞬時 sd は僅かに悪化するが、それはグラフの
+          //   見た目の指標にすぎない。設計原則: ノイズより欠測を恐れる。
+          //   無音・過小信号は firmware 側 (AMPLITUDE_MIN=10 / MIN_PP=20 で
+          //   freq_hz = -1) が既に落としているので HTML 側の下限は不要。
+          const FREQ_AMP_GATE_ENTRY  = 0.0;
+          const FREQ_AMP_GATE_HOLD   = 0.0;
           const FREQ_POLY_WIN     = 3;         // 回帰ウィンドウ (フレーム数). 中央化窓 ±1:
           // 3 フレーム揃ったら slope を 中央 (buf[1])
           // に対応する freqSession entry へ back-fill。
@@ -413,6 +437,7 @@
           let thetaLastT        = null;  // 直前ブロックの elapsed_s (PLL 予測の dt 計算用)
           let polyBuffer        = [];    // 直近 (t_s, theta_unwrapped, amp) のサンプル群
           let totalDropCount    = 0;     // 累積 DMA drop_delta 合計 (診断表示用)
+          let fwCarrierOffHz    = 0;     // firmware が起動時に適用した搬送波オフセット [Hz] (r7 以降)
           let lastSlopeRadPerS  = null;  // 直前 fit の slope (PLL-guided unwrap 用)
           let freqTracking      = false; // ヒステリシスゲート用: tracking 中か (HOLD/ENTRY 切替)
           
@@ -443,7 +468,8 @@
             const slope_rad_per_s = Sth / Stt;   // dθ/dt [rad/s]
             // θ は (signal_freq - F0_assumed) を時間積分した位相に対応するため、
             //   freq = F0 + slope/(2π)
-            const freq = F0 + slope_rad_per_s / (2 * Math.PI);
+            const freq = F0 - fwCarrierOffHz + slope_rad_per_s / (2 * Math.PI);
+//   ^ theta_raw はビン基準なので firmware の搬送波オフセットを戻す
             return { freq, slope: slope_rad_per_s, n: buf.length };
           }
           
@@ -461,16 +487,23 @@
             freqTracking      = false;
           }
           
-          // 絶対周波数校正: f0 校正係数 = F0 / fRef
-          // 静止時の median freq_hz (= fRef) を音源真値 F0=2000Hz として表示する。
-          // ESP32 xtal が +1573 ppm 程度速いため、firmware は 2000Hz 音源を 1996.86Hz と
-          // 報告するが、表示用に × (F0/fRef) を掛けて 2000.00 Hz として見せる。
-          // Doppler 比は不変なので、scatter 解析の slope は係数で同様に scale されるだけ
-          // (R² や% 表示は係数を考慮済み)。
+          // 絶対周波数校正は 2026-08-11 に廃止した (常に 1.0)。
+          //   firmware r7 が起動時に実 ADC サンプリング周波数を測って DTHETA_CARRIER を
+          //   搬送波に合わせるので、2000 Hz 音源は既に 2000 Hz として報告される。
+          //   実測 (2000 Hz 音源・別ブート 4 回) の median freq_hz_raw =
+          //     2000.020 / 1999.994 / 2000.014 / 1999.998  -> 残差 rms 0.013 Hz
+          //     (= 0.002 m/s)。HTML 側で重ねて校正する必要はない。
+          //   むしろ危険で、fRef は静止フレームが 3 個未満だと「全フレームの median」へ
+          //   フォールバックする。片道走行ではそれは平均 Doppler シフトそのものなので、
+          //   平均速度が強制的に 0 にされる (0.3 m/s で遠ざかる走行なら全体が +1.75 Hz
+          //   ずれる)。生徒が毎回必ず静止してから動かすことは期待できない以上、
+          //   校正しない方が安全。副次的な利点として
+          //     (a) 「静止 -> 2000 Hz」が押し付けでなく観測事実になる
+          //     (b) 班・クラス・日をまたいで周波数軸が比較できる。
+          //   残る系統誤差は音源側の音声クロック ±50 ppm = ±0.1 Hz。速度の原点が
+          //   ±0.017 m/s ずれるだけで、傾き (= 加速度) には影響しない。
           function calibrationFactor() {
-            const fRef = computeFRef();
-            if (!isFinite(fRef) || fRef < F0 - 100 || fRef > F0 + 100) return 1.0;
-            return F0 / fRef;
+            return 1.0;
           }
           
           // ═══════════════════════════════════════════════
@@ -487,8 +520,9 @@
           //  データバッファ
           // ═══════════════════════════════════════════════
           let posSession  = [];  // { t_ms, elapsed_s, pos_m, vel_ms }
-          let freqSession = [];  // { t_true_ms, elapsed_s, freq_hz, freq_clean, amplitude,
-          //   gap_ok, theta_raw, dt_us }
+          let freqSession = [];  // { t_true_ms, elapsed_s, freq_hz, freq_clean, freq_ok,
+          //   amplitude, gap_ok, theta_raw, dt_us }
+          //   出力に使うのは freq_hz と freq_ok。freq_clean は整合ガード専用の内部値。
           
           let posValues       = [];
           let velValues       = [];
@@ -636,11 +670,21 @@
             const freq_hz   = dv.getFloat32(4,  true);
             const amplitude = dv.getFloat32(8,  true);
             const theta_raw = dv.getFloat32(12, true);
-            // Stage 2a-r1: diag word = (drop_delta<<16) | (dt_us & 0xFFFF)
-            const diag      = dv.getUint32(16,  true);
-            const dt_us     = diag & 0xFFFF;            // 下位16bit (dt_us mod 65536)
-            const drop_delta = (diag >>> 16) & 0xFFFF;  // 上位16bit (このブロックの DMA drop 数)
-            if (drop_delta > 0) totalDropCount += drop_delta;
+            // 【2026-08-11 修正】16-19 バイトは 32bit の dt_us そのもの。
+            // 旧版は Stage 2a-r1 の規約 (diag = (drop_delta<<16) | (dt_us & 0xFFFF)) で読んで
+            // いたが、ファームは 2026-05-15 に drop-aware を撤回しており上位 16bit に
+            // drop_delta は入っていない。旧解釈のままだと dt_us > 65535 µs (BLE が一瞬
+            // 詰まっただけ) で幻の drop_delta が立ち、そのフレームが tracking_break で
+            // 捨てられていた。設計原則「ノイズより欠測を恐れる」に反するので除外もやめる。
+            // 実際の ADC 脱落は 20-21 バイトの累積カウンタ (r7 以降)。表示専用に使う。
+            const dt_us     = dv.getUint32(16,  true);
+            const drop_delta = 0;   // CSV 列を維持するためのプレースホルダ (除外には使わない)
+            if (dv.byteLength >= 24) totalDropCount = dv.getUint16(20, true);
+            // 【2026-08-11】theta_raw は Goertzel ビン基準で回るため、θ-回帰で再構成した
+            // 周波数には firmware の搬送波補正 (DTHETA_CARRIER) が入っていない。22-23 バイトの
+            // carrier_off を読み、fitTheta 側で戻す。旧 20 バイト firmware では 0 のまま
+            // (当時は DTHETA_CARRIER も 0 なので整合する)。
+            if (dv.byteLength >= 24) fwCarrierOffHz = dv.getInt16(22, true) / 100.0;
             
             if (firstFreqEspTime < 0) firstFreqEspTime = t_esp_s;
             const elapsed_s = t_esp_s - firstFreqEspTime;
@@ -679,7 +723,6 @@
             const ampGate = freqTracking ? FREQ_AMP_GATE_HOLD : FREQ_AMP_GATE_ENTRY;
             const tracking_break = (freqFrameCount <= FREQ_STARTUP_SKIP)
             || !gap_ok
-            || (drop_delta > 0)
             || (freq_hz <= 0)
             || (amplitude < ampGate);
             
@@ -727,27 +770,36 @@
                 if (centerIdx >= 0) {
                   const centerEntry   = freqSession[centerIdx];
                   const centerFreqHz  = centerEntry.freq_hz;
-                  // 異常 outlier ガード: 回帰推定が中央フレームの生 freq_hz と大きく
-                  // 乖離するなら unwrap がまだ安定していない可能性が高いので破棄。
-                  if (Math.abs(fit.freq - centerFreqHz) <= FREQ_GAP_GATE_HZ) {
-                    centerEntry.freq_clean = fit.freq;
-                    // 表示用 freqValues も同じ位置を back-fill (1:1 対応)
+                  // 整合ガード (2026-08-13 に役割を変更):
+                  //   θ-回帰の推定値と中央フレームの生 freq_hz が FREQ_GAP_GATE_HZ 以上
+                  //   ずれたら、その生フレームを「壊れている」と判定して無効化する。
+                  //   ずれの実体は干渉ヌルを踏んだ 1 フレームの脱落 (実測 +12.8 Hz @ amp=150)。
+                  //   14 走行 1040 フレームで発火 1 個。これを残すと 1 走行の傾きが
+                  //   見かけ音速 354 -> 414 m/s に壊れる。
+                  const consistent = Math.abs(fit.freq - centerFreqHz) <= FREQ_GAP_GATE_HZ;
+                  centerEntry.freq_clean = consistent ? fit.freq : null;
+                  if (!consistent) {
+                    centerEntry.freq_ok = false;
+                    // 表示用 freqValues も同じ位置を無効化 (1:1 対応)
                     const chartIdx = freqValues.length - 1;
-                    if (chartIdx >= 0) freqValues[chartIdx] = fit.freq;
+                    if (chartIdx >= 0) freqValues[chartIdx] = -1;
                   }
                 }
               }
             }
             
-            freqSession.push({ t_true_ms, elapsed_s, freq_hz, freq_clean, amplitude, gap_ok,
-            theta_raw, dt_us, drop_delta });
-            updateAmpIndicator(amplitude);
-            
+            // freq_ok = この生 freq_hz を教材の値として出してよいか。
+            //   既定は true。後続フレームで θ-回帰の整合ガードが発火したときだけ
+            //   false に落とす（back-fill なので 1 frame 遅れて確定する）。
+            freqSession.push({ t_true_ms, elapsed_s, freq_hz, freq_clean, freq_ok: (freq_hz > 0),
+            amplitude, gap_ok, theta_raw, dt_us, drop_delta });
+            updateAmpIndicator(amplitude, freq_hz);
+
             // NULL フレームも push（drawFreqChart は <=0 を line break として扱う）。
-            // こうしないと、低振幅で freq_clean が NULL の区間を直線で繋いでしまい、
-            // ターンアラウンド付近で「速度変化より先に freq が上昇」して見える錯覚を生む。
+            // こうしないと、無効フレームの区間を直線で繋いでしまい、ターンアラウンド
+            // 付近で「速度変化より先に freq が上昇」して見える錯覚を生む。
             {
-              freqValues.push(freq_clean !== null ? freq_clean : -1);
+              freqValues.push(freq_hz > 0 ? freq_hz : -1);
               const adjTrueMs = t_true_ms + samplingTailAdjMs;
               const freq_t_chart_s = (adjTrueMs - firstFreqRecvMs) / 1000;
               freqTimeValues.push(freq_t_chart_s);
@@ -945,8 +997,9 @@
             ctx.fillRect(0, 0, W, H);
             if (rawDataIn.length < 2) return;
             
-            // cal_factor (= F0 / fRef) を表示時に乗じて、生徒に見せる縦軸を 2000 Hz 基準に
-            // スケールする。<= 0 はライン break 用の sentinel なのでそのまま残す。
+            // cal_factor は 2026-08-11 以降つねに 1.0 (校正廃止, calibrationFactor 参照)。
+            // 呼び出しは将来の再導入のために残してある。
+            // <= 0 はライン break 用の sentinel なのでそのまま残す。
             const cf = calibrationFactor();
             const data = rawDataIn.map(v => v > 0 ? v * cf : v);
             
@@ -1002,7 +1055,7 @@
               ctx.setLineDash([]);
             }
             
-            // freq_clean 実線 (NULL 区間は line break)
+            // 生周波数 実線 (無効フレームの区間は line break)
             ctx.strokeStyle = '#cc6600'; ctx.lineWidth = 2;
             ctx.beginPath();
             let started = false;
@@ -1025,18 +1078,32 @@
           }
           
           // ═══════════════════════════════════════════════
-          //  振幅インジケーター（旧スペクトル品質バッジの代替）
+          //  音の受信インジケーター
           // ═══════════════════════════════════════════════
-          function updateAmpIndicator(amplitude) {
+          // 2026-08-11 改訂。旧版は amplitude ≥ 400 を GOOD / 200 を LOW / それ未満を
+          // POOR と表示していたが、静止音源の振幅変調 対照実験 6 走行で判定が
+          // 逆を向いていると分かった:
+          //     最良の条件 (amp ~350, 10s 傾き誤差 0.0010 m/s) -> 「LOW」
+          //     最悪の条件 (amp ~850, MAX9814 出力がクリップ) -> 「GOOD」
+          // そもそも音量は生徒が読む量にほとんど効かない。10s 走行の傾き誤差は
+          // 全条件で 0.05-1.8% (0.5 m/s のカートに対して区別不能) で、瞬時値の
+          // 散らばりは telescoping で消える。音量を追い込ませる UI は有害無益なので、
+          // 「音が届いていない」ときだけ知らせる。
+          let noSignalFrames = 0;
+          function updateAmpIndicator(amplitude, freq_hz) {
             const badge  = document.getElementById('sQualityBadge');
             const detail = document.getElementById('sQualityDetail');
-            let text, color;
-            let hint;
-            if (amplitude >= 400)      { text = 'GOOD'; color = '#008855'; hint = ''; }
-            else if (amplitude >= 200) { text = 'LOW';  color = '#b86e00'; hint = ''; }
-            else                       { text = 'POOR'; color = '#d42045'; hint = ''; }
-            if (badge)  { badge.textContent = text; badge.style.color = color; }
-            if (detail) { detail.textContent = hint; detail.style.color = color; }
+            // firmware は無音・過小信号のとき freq_hz = -1 を返す (AMPLITUDE_MIN / MIN_PP)。
+            noSignalFrames = (freq_hz > 0) ? 0 : noSignalFrames + 1;
+            const lost = noSignalFrames >= 20;   // 20 frame = 1.0 s 連続で音が取れていない
+            if (badge) {
+              badge.textContent = lost ? '音が届いていません' : 'OK';
+              badge.style.color = lost ? '#d42045' : '#008855';
+            }
+            if (detail) {
+              detail.textContent = lost ? '音源が鳴っているか、マイクとの距離を確認してください' : '';
+              detail.style.color = '#d42045';
+            }
           }
           
           // ═══════════════════════════════════════════════
@@ -1044,7 +1111,7 @@
           // ═══════════════════════════════════════════════
           function computeFRef() {
             const stationaryFreqs = freqSession
-            .filter(f => f.freq_hz > 0)
+            .filter(f => f.freq_ok)   // 整合ガード通過分のみ = 生徒が見る母集団と同じ
             .map(f => {
                 const p = interpolatePos(f.t_true_ms + samplingTailAdjMs);
                 return p && Math.abs(p.vel_ms) < 0.08 ? f.freq_hz : null;
@@ -1054,14 +1121,12 @@
               stationaryFreqs.sort((a, b) => a - b);
               return stationaryFreqs[Math.floor(stationaryFreqs.length / 2)];
             }
-            const allFreqs = freqSession
-            .filter(f => f.freq_hz > 0)
-            .map(f => f.freq_hz);
-            if (allFreqs.length >= 3) {
-              allFreqs.sort((a, b) => a - b);
-              return allFreqs[Math.floor(allFreqs.length / 2)];
-            }
-            return F0;  // フォールバック
+            // 静止フレームが足りないとき、旧版は「全フレームの median」へ落ちていた。
+            // 片道走行ではそれは平均 Doppler シフトそのもので、散布図の理論曲線を
+            // 走行速度の分だけずらしてしまう。firmware r7 の搬送波校正で f₀ は
+            // 0.013 Hz rms の精度で 2000 Hz に載っているので、素直に F0 を使う
+            // (2026-08-11)。
+            return F0;
           }
           
           // ═══════════════════════════════════════════════
@@ -1132,15 +1197,15 @@
             const pts = [];
             for (let i = 0; i < n; i++) {
               const f = freqSession[i];
-              if (f.freq_clean === null) continue;
+              if (!f.freq_ok) continue;
               const ip = interpolatePos(f.t_true_ms + samplingTailAdjMs, HALF_WIN);
               if (!ip || ip.vel_ms === null) continue;
               const v = ip.vel_ms;
               if (Math.abs(v) > V_MAX) continue;
-              pts.push({ v, df: (f.freq_clean - fRef) * cf });
+              pts.push({ v, df: (f.freq_hz - fRef) * cf });
             }
-            
-            // freq_clean 点（橙）— グラフと同じ系列を使用して教材の一貫性を保つ
+
+            // 生周波数の点（橙）— グラフ・CSV と同じ系列を使用して教材の一貫性を保つ
             pts.forEach(p => {
                 const x = toX(p.v), y = toY(p.df);
                 if (x < PAD_L || x > PAD_L+plotW || y < PAD_T || y > PAD_T+plotH) return;
@@ -1174,11 +1239,9 @@
             // ESP32 xtal の絶対バイアス (~ -3 Hz @ 2 kHz) を見かけ上 0 にして、
             // 学校現場で「2000 Hz 音源 → 表示 2000.0 Hz」となるようにする。
             const cf = calibrationFactor();
-            // グラフ・scatter・CSV と同じく freq_clean (θ-回帰) を表示。
-            // freq_clean が未確定の起動直後だけ raw freq_hz にフォールバック。
-            const lastClean = [...freqSession].reverse().find(f => f.freq_clean !== null);
-            const lastRaw   = [...freqSession].reverse().find(f => f.freq_hz > 0);
-            const fShowSrc  = lastClean ? lastClean.freq_clean : (lastRaw ? lastRaw.freq_hz : null);
+            // グラフ・scatter・CSV と同じく生 freq_hz を表示（整合ガード通過分のみ）。
+            const lastRaw   = [...freqSession].reverse().find(f => f.freq_ok);
+            const fShowSrc  = lastRaw ? lastRaw.freq_hz : null;
             if (fShowSrc !== null) {
               document.getElementById('sFreqLast').textContent = (fShowSrc * cf).toFixed(1) + ' Hz';
             }
@@ -1533,6 +1596,7 @@
             [ctxPos, ctxVel, ctxFreq, ctxScatter].forEach(ctx => {
                 if (ctx) ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
             });
+            noSignalFrames = 0;
             const qb = document.getElementById('sQualityBadge');
             if (qb) { qb.textContent = '—'; qb.style.color = 'var(--dim)'; }
             const qd = document.getElementById('sQualityDetail');
@@ -1613,8 +1677,13 @@
           
           // ═══════════════════════════════════════════════
           //  CSV 出力
-          //  列: elapsed_s, pos_m, vel_ms, freq_clean, amplitude
-          //  freq_clean は cal_factor 適用済み（2000 Hz 基準）の値。
+          //  列: elapsed_s, pos_m, vel_ms, freq, amplitude   (5 列)
+          //  freq は firmware がそのまま報告する生 freq_hz（cal_factor 適用済み、
+          //    2026-08-11 以降 cal_factor は常に 1.0）。θ-回帰は通していない。
+          //  2026-08-13: 診断列（旧 6 列目 生周波数）を廃止し、旧 4 列目の θ-回帰値を
+          //    生に置き換えた。θ-回帰は傾きを 1-3% 削っていた（14 走行中 13 走行で
+          //    符号一貫）。詳細は HANDOFF_2026-08-13.md §2。
+          //  整合ガードが発火したフレーム（1040 に 1 個）だけ空欄になる。
           // ═══════════════════════════════════════════════
           function buildCsv() {
             if (freqSession.length > 0) {
@@ -1635,11 +1704,13 @@
                   if (ip.vel_ms !== null) vel_ms_str = ip.vel_ms.toFixed(6);
                 }
                 
-                const freq_clean_str = f.freq_clean !== null ? (f.freq_clean * cf).toFixed(4) : '';
-                const amp_str        = f.amplitude  != null  ? f.amplitude.toFixed(4)         : '';
-                
+                // 生 freq_hz。無効フレーム (freq_hz <= 0) と整合ガードが
+                // 発火したフレームは空欄。
+                const freq_str = f.freq_ok ? (f.freq_hz * cf).toFixed(4) : '';
+                const amp_str  = f.amplitude != null ? f.amplitude.toFixed(4) : '';
+
                 out += `${f.elapsed_s.toFixed(4)},${pos_m_str},${vel_ms_str},`
-                + `${freq_clean_str},${amp_str}\n`;
+                + `${freq_str},${amp_str}\n`;
               }
               return out;
             }
