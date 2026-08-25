@@ -266,8 +266,8 @@
             <div class="modal-footer">
               <span id="csvRowCount" style="font-size:0.75rem; color:var(--dim);"></span>
               <div style="display:flex; gap:8px;">
-                <button class="btn-reset" id="btnCopy">Copy</button>
-                <button class="btn-csv"   id="btnDownload">Download</button>
+                <button class="btn-reset" id="btnCopy">表計算に貼り付け（コピー）</button>
+                <button class="btn-csv"   id="btnDownload">CSV保存</button>
               </div>
             </div>
           </div>
@@ -1742,10 +1742,32 @@
           document.getElementById('btnCloseModal').addEventListener('click', () => {
               document.getElementById('csvModal').classList.remove('open');
           });
-          document.getElementById('btnCopy').addEventListener('click', () => {
-              const ta = document.getElementById('csvOutput');
-              ta.select();
-              navigator.clipboard.writeText(ta.value).catch(() => document.execCommand('copy'));
+          document.getElementById('btnCopy').addEventListener('click', async () => {
+              // 表計算に貼るならタブ区切りが確実。CSV のまま貼ると 1 列に入ってしまい、
+              // 「区切り位置」の操作が要る。値にカンマは含まれないので単純に置き換えてよい。
+              const tsv = buildCsv().split('\n').map(l => l.split(',').join('\t')).join('\r\n');
+              const btn = document.getElementById('btnCopy');
+              const fallback = () => {
+                const ta = document.createElement('textarea');
+                ta.value = tsv;
+                ta.style.position = 'fixed';
+                ta.style.opacity  = '0';
+                document.body.appendChild(ta);
+                ta.focus(); ta.select();
+                document.execCommand('copy');
+                document.body.removeChild(ta);
+              };
+              try {
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                  await navigator.clipboard.writeText(tsv);
+                } else {
+                  fallback();
+                }
+              } catch (_) {
+                fallback();
+              }
+              btn.textContent = 'コピーしました';
+              setTimeout(() => { btn.textContent = '表計算に貼り付け（コピー）'; }, 1200);
           });
           document.getElementById('btnDownload').addEventListener('click', () => {
               // 先頭に UTF-8 BOM を付けて Excel (日本語版) が Shift-JIS と誤認しないようにする
