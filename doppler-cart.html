@@ -84,8 +84,12 @@
           .btn-stop:hover:not(:disabled) { background: var(--danger); color: #fff; }
           .btn-reset { border-color: var(--dim); color: var(--dim); }
           .btn-reset:hover:not(:disabled) { background: var(--dim); color: #fff; }
-          .btn-csv   { border-color: var(--warn); color: var(--warn); margin-left: auto; }
+          .btn-csv   { border-color: var(--warn); color: var(--warn); }
           .btn-csv:hover:not(:disabled) { background: var(--warn); color: #fff; }
+          /* 書き出し系は右端にまとめる（CSV = 主・画像 = 副。同じ色相で枠だけ淡く）*/
+          .export-group { display: flex; gap: 10px; margin-left: auto; }
+          .btn-img   { border-color: color-mix(in srgb, var(--warn) 35%, #ffffff); color: var(--warn); }
+          .btn-img:hover:not(:disabled) { background: var(--warn); color: #fff; border-color: var(--warn); }
           
           /* 統計4枚 + 信号品質 を 1 本の横ストリップに統合（縦スペース節約） */
           .info-strip { display: flex; gap: 10px; flex-wrap: wrap; }
@@ -157,6 +161,20 @@
             font-size: 0.78rem; padding: 10px; border: 1px solid var(--border); border-radius: 4px;
           }
           .modal-footer { display: flex; justify-content: space-between; align-items: center; }
+
+          /* 画像書き出しモーダル */
+          .seg { display: flex; gap: 6px; flex-wrap: wrap; }
+          .seg button {
+            padding: 6px 14px; font-size: 0.72rem; text-transform: none; letter-spacing: 0.04em;
+            border-color: var(--border); color: var(--dim);
+          }
+          .seg button.active { border-color: var(--warn); color: var(--warn); background: rgba(184,110,0,0.08); }
+          .seg button:disabled { opacity: 0.3; }
+          .img-preview {
+            border: 1px solid var(--border); border-radius: 4px; background: #ffffff;
+            padding: 8px; max-height: 48vh; overflow: auto; display: flex; justify-content: center;
+          }
+          .img-preview img { max-width: 100%; height: auto; }
         </style>
       </head>
       <body>
@@ -182,7 +200,10 @@
           <button class="btn-start" id="btnStart" disabled>Record</button>
           <button class="btn-stop"  id="btnStop"  disabled>Stop</button>
           <button class="btn-reset" id="btnReset" disabled>Reset</button>
-          <button class="btn-csv"   id="btnCsv"   disabled>CSV Export</button>
+          <div class="export-group">
+            <button class="btn-csv" id="btnCsv" disabled>CSV Export</button>
+            <button class="btn-img" id="btnImg" disabled>画像保存</button>
+          </div>
         </div>
         
         <div class="info-strip">
@@ -268,6 +289,28 @@
               <div style="display:flex; gap:8px;">
                 <button class="btn-reset" id="btnCopy">表計算に貼り付け（コピー）</button>
                 <button class="btn-csv"   id="btnDownload">CSV保存</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-overlay" id="imgModal">
+          <div class="modal" style="width:min(880px,95vw);">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <h2 style="font-size:1rem; font-weight:600;">画像の書き出し</h2>
+              <button id="btnCloseImgModal" style="border:none; background:none; font-size:1.5rem; cursor:pointer; line-height:1;">✕</button>
+            </div>
+            <div class="seg" id="imgRange">
+              <button data-mode="all"        class="active">全部（数値＋グラフ）</button>
+              <button data-mode="scatter">散布図だけ</button>
+              <button data-mode="timeseries">時系列だけ</button>
+            </div>
+            <div class="img-preview"><img id="imgPreview" alt="書き出し画像のプレビュー"></div>
+            <div class="modal-footer">
+              <span id="imgInfo" style="font-size:0.75rem; color:var(--dim); font-family:'Share Tech Mono',monospace;"></span>
+              <div style="display:flex; gap:8px;">
+                <button class="btn-reset" id="btnImgCopy">画像をコピー</button>
+                <button class="btn-csv"   id="btnImgSave">画像を保存</button>
               </div>
             </div>
           </div>
@@ -512,6 +555,12 @@
           let isRecording     = false;
           let recordStartTime = 0;
           let scatterRunCount = 0;  // §4.4-M: 累積走行数（startRecording で +1、resetAll で 0）
+          // 走行スタンプ: Reset 後の最初の Record で確定し、CSV と PNG で共有する。
+          // 保存を押した時刻ではなく「測り始めた時刻」なので、同じデータから出した
+          // CSV と画像が同じ名前になり、レポートの図から元データに戻れる。
+          // (freqSession は Reset まで走行をまたいで蓄積されるので、スタンプも
+          //  データセットと同じ寿命 = Reset で null に戻す。)
+          let runStamp = null;
           
           const samplingTailAdjMs = SAMPLING_TAIL_ADJ_FIXED;
           let bleStallCount   = 0;
@@ -859,13 +908,20 @@
           // ═══════════════════════════════════════════════
           //  Canvas 描画
           // ═══════════════════════════════════════════════
+          // 描画関数は「論理サイズ (CSS px)」で座標を組む。画面用の canvas は
+          // 等倍 (_s 未設定) なので canvas.width がそのまま論理幅。画像書き出しは
+          // オフスクリーン canvas を IMG_SCALE 倍にして setTransform を掛けるので、
+          // 論理サイズは canvas.width / _s で戻す（PAD_L=62 等の固定 px を壊さない）。
+          function _cw(ctx) { return ctx.canvas.width  / (ctx._s || 1); }
+          function _ch(ctx) { return ctx.canvas.height / (ctx._s || 1); }
+
           const ctxPos     = document.getElementById('chartPos').getContext('2d');
           const ctxVel     = document.getElementById('chartVel').getContext('2d');
           const ctxFreq    = document.getElementById('chartFreq').getContext('2d');
           const ctxScatter = document.getElementById('chartScatter').getContext('2d');
           
           function drawChart(ctx, data, color, times, labelEl, unit) {
-            const W = ctx.canvas.width, H = ctx.canvas.height;
+            const W = _cw(ctx), H = _ch(ctx);
             ctx.clearRect(0, 0, W, H);
             ctx.fillStyle = '#ffffff';
             ctx.fillRect(0, 0, W, H);
@@ -933,7 +989,7 @@
           }
           
           function drawVelChart(ctx, rawData, smoothData, times, labelEl) {
-            const W = ctx.canvas.width, H = ctx.canvas.height;
+            const W = _cw(ctx), H = _ch(ctx);
             ctx.clearRect(0, 0, W, H);
             ctx.fillStyle = '#ffffff';
             ctx.fillRect(0, 0, W, H);
@@ -991,7 +1047,7 @@
           }
           
           function drawFreqChart(ctx, rawDataIn, times, labelEl) {
-            const W = ctx.canvas.width, H = ctx.canvas.height;
+            const W = _cw(ctx), H = _ch(ctx);
             ctx.clearRect(0, 0, W, H);
             ctx.fillStyle = '#ffffff';
             ctx.fillRect(0, 0, W, H);
@@ -1132,12 +1188,15 @@
           // ═══════════════════════════════════════════════
           //  散布図（v vs. Δf）— V_MAX=2.0 m/s, DF_MAX=12 Hz
           // ═══════════════════════════════════════════════
-          function drawScatter() {
-            if (!ctxScatter) return;
-            const W = ctxScatter.canvas.width, H = ctxScatter.canvas.height;
-            ctxScatter.clearRect(0, 0, W, H);
-            ctxScatter.fillStyle = '#ffffff';
-            ctxScatter.fillRect(0, 0, W, H);
+          // ctx 省略時は画面の散布図キャンバスに描く。画像書き出しは
+          // オフスクリーン ctx を渡して同じコードで 2 倍解像度に描かせる。
+          function drawScatter(ctx) {
+            ctx = ctx || ctxScatter;
+            if (!ctx) return;
+            const W = _cw(ctx), H = _ch(ctx);
+            ctx.clearRect(0, 0, W, H);
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, W, H);
             
             const PAD_L = 62, PAD_R = 20, PAD_T = 16, PAD_B = 36;
             const plotW = W - PAD_L - PAD_R, plotH = H - PAD_T - PAD_B;
@@ -1147,30 +1206,30 @@
             const toX = v  => PAD_L + (v + V_MAX) / (2 * V_MAX) * plotW;
             const toY = df => PAD_T + plotH - (df + DF_MAX) / (2 * DF_MAX) * plotH;
             
-            ctxScatter.strokeStyle = 'rgba(160,185,210,0.45)'; ctxScatter.lineWidth = 1;
+            ctx.strokeStyle = 'rgba(160,185,210,0.45)'; ctx.lineWidth = 1;
             const vTicks  = [-2,-1,0,1,2];
             const dfTicks = [-8,-4,0,4,8];
             vTicks.forEach(v => {
                 const x = toX(v);
-                ctxScatter.beginPath(); ctxScatter.moveTo(x, PAD_T); ctxScatter.lineTo(x, PAD_T+plotH); ctxScatter.stroke();
-                ctxScatter.fillStyle='#6b8099'; ctxScatter.font='10px "Share Tech Mono",monospace'; ctxScatter.textAlign='center';
-                ctxScatter.fillText(v.toFixed(0), x, PAD_T+plotH+14);
+                ctx.beginPath(); ctx.moveTo(x, PAD_T); ctx.lineTo(x, PAD_T+plotH); ctx.stroke();
+                ctx.fillStyle='#6b8099'; ctx.font='10px "Share Tech Mono",monospace'; ctx.textAlign='center';
+                ctx.fillText(v.toFixed(0), x, PAD_T+plotH+14);
             });
             dfTicks.forEach(df => {
                 const y = toY(df);
-                ctxScatter.beginPath(); ctxScatter.moveTo(PAD_L, y); ctxScatter.lineTo(PAD_L+plotW, y); ctxScatter.stroke();
-                ctxScatter.fillStyle='#6b8099'; ctxScatter.font='10px "Share Tech Mono",monospace'; ctxScatter.textAlign='right';
-                ctxScatter.fillText(df.toFixed(0), PAD_L-6, y+4);
+                ctx.beginPath(); ctx.moveTo(PAD_L, y); ctx.lineTo(PAD_L+plotW, y); ctx.stroke();
+                ctx.fillStyle='#6b8099'; ctx.font='10px "Share Tech Mono",monospace'; ctx.textAlign='right';
+                ctx.fillText(df.toFixed(0), PAD_L-6, y+4);
             });
-            ctxScatter.fillStyle='#6b8099'; ctxScatter.font='11px "Exo 2",sans-serif'; ctxScatter.textAlign='center';
-            ctxScatter.fillText('velocity  v  (m/s)', PAD_L + plotW/2, PAD_T+plotH+28);
-            ctxScatter.save(); ctxScatter.translate(14, PAD_T+plotH/2); ctxScatter.rotate(-Math.PI/2);
-            ctxScatter.fillText('Δf (Hz)', 0, 0); ctxScatter.restore();
+            ctx.fillStyle='#6b8099'; ctx.font='11px "Exo 2",sans-serif'; ctx.textAlign='center';
+            ctx.fillText('velocity  v  (m/s)', PAD_L + plotW/2, PAD_T+plotH+28);
+            ctx.save(); ctx.translate(14, PAD_T+plotH/2); ctx.rotate(-Math.PI/2);
+            ctx.fillText('Δf (Hz)', 0, 0); ctx.restore();
             
-            ctxScatter.strokeStyle='rgba(100,120,140,0.8)'; ctxScatter.setLineDash([4,3]); ctxScatter.lineWidth=1;
-            ctxScatter.beginPath(); ctxScatter.moveTo(toX(0),PAD_T); ctxScatter.lineTo(toX(0),PAD_T+plotH); ctxScatter.stroke();
-            ctxScatter.beginPath(); ctxScatter.moveTo(PAD_L,toY(0)); ctxScatter.lineTo(PAD_L+plotW,toY(0)); ctxScatter.stroke();
-            ctxScatter.setLineDash([]);
+            ctx.strokeStyle='rgba(100,120,140,0.8)'; ctx.setLineDash([4,3]); ctx.lineWidth=1;
+            ctx.beginPath(); ctx.moveTo(toX(0),PAD_T); ctx.lineTo(toX(0),PAD_T+plotH); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(PAD_L,toY(0)); ctx.lineTo(PAD_L+plotW,toY(0)); ctx.stroke();
+            ctx.setLineDash([]);
             
             const fRef    = computeFRef();
             const cf      = calibrationFactor();
@@ -1178,18 +1237,18 @@
             const VS = 343.0;
             
             // 理論曲線（cal_factor 適用済み f₀ で描画）
-            ctxScatter.strokeStyle = '#222'; ctxScatter.lineWidth = 2;
-            ctxScatter.beginPath();
+            ctx.strokeStyle = '#222'; ctx.lineWidth = 2;
+            ctx.beginPath();
             let first = true;
             for (let i = -200; i <= 200; i++) {
               const v = i * V_MAX / 200;
               const df = -f0_disp * v / VS;
               if (Math.abs(df) > DF_MAX * 1.1) { first = true; continue; }
               const x = toX(v), y = toY(df);
-              first ? ctxScatter.moveTo(x, y) : ctxScatter.lineTo(x, y);
+              first ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
               first = false;
             }
-            ctxScatter.stroke();
+            ctx.stroke();
             
             // データ収集（Δf も cal_factor 適用後の値で算出 → 理論線と同じスケール）
             const HALF_WIN = CSV_VEL_HALF_WIN;
@@ -1209,16 +1268,16 @@
             pts.forEach(p => {
                 const x = toX(p.v), y = toY(p.df);
                 if (x < PAD_L || x > PAD_L+plotW || y < PAD_T || y > PAD_T+plotH) return;
-                ctxScatter.beginPath(); ctxScatter.arc(x, y, 4.5, 0, Math.PI*2);
-                ctxScatter.fillStyle = 'rgba(204,102,0,0.75)'; ctxScatter.fill();
+                ctx.beginPath(); ctx.arc(x, y, 4.5, 0, Math.PI*2);
+                ctx.fillStyle = 'rgba(204,102,0,0.75)'; ctx.fill();
             });
             
             // 理論式テキストのみ（fit / R² は教育上、生徒が自分で計算する）
-            ctxScatter.font = '10px "Share Tech Mono",monospace'; ctxScatter.textAlign='left';
-            ctxScatter.fillStyle='#222';
-            ctxScatter.fillText(`理論 (低速近似): Δf = -f₀·v/vₛ  f₀=${f0_disp.toFixed(2)} Hz  vₛ=343 m/s`, PAD_L+6, PAD_T+14);
+            ctx.font = '10px "Share Tech Mono",monospace'; ctx.textAlign='left';
+            ctx.fillStyle='#222';
+            ctx.fillText(`理論 (低速近似): Δf = -f₀·v/vₛ  f₀=${f0_disp.toFixed(2)} Hz  vₛ=343 m/s`, PAD_L+6, PAD_T+14);
             
-            const infoEl = document.getElementById('scatterInfo');
+            const infoEl = (ctx === ctxScatter) ? document.getElementById('scatterInfo') : null;
             if (infoEl) {
               const runStr = scatterRunCount > 1 ? ` / ${scatterRunCount} runs pooled` : '';
               infoEl.textContent = `${pts.length} pts${runStr}`;
@@ -1529,6 +1588,7 @@
             lastNotifyTime  = 0;
             lastNotifyPos   = 0;
             bleStallCount   = 0;
+            if (!runStamp) runStamp = makeStamp();   // Reset 後の最初の Record で確定
             scatterRunCount += 1;  // §4.4-M: 累積モードで走行カウンタを増加
             log(`Recording started (run #${scatterRunCount}).`);
             prevFreqEspTime  = -1;
@@ -1558,6 +1618,7 @@
             
             const hasData = posSession.length > 0 || freqSession.length > 0;
             document.getElementById('btnCsv').disabled = !hasData;
+            document.getElementById('btnImg').disabled = !hasData;
             updateButtonStates();
             const stallNote = bleStallCount > 0 ? ` (BLE stall ${bleStallCount} 回検出)` : '';
             log(`Recording stopped. pos=${posSession.length} frames, freq=${freqSession.length} frames${stallNote}. (BLE subscription remains active)`);
@@ -1583,6 +1644,7 @@
             resetThetaTracking();
             recordEndTime_s   = 0;
             scatterRunCount   = 0;  // §4.4-M: 走行カウンタもリセット
+            runStamp          = null;  // 次の Record で新しい走行スタンプを取る
             posSession = []; freqSession = [];
             posValues = []; velValues = []; velSmoothValues = []; freqValues = [];
             posTimeValues = []; freqTimeValues = [];
@@ -1593,6 +1655,7 @@
                 document.getElementById(id).textContent = '';
             });
             document.getElementById('btnCsv').disabled = true;
+            document.getElementById('btnImg').disabled = true;
             [ctxPos, ctxVel, ctxFreq, ctxScatter].forEach(ctx => {
                 if (ctx) ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
             });
@@ -1721,6 +1784,21 @@
             return out;
           }
           
+          // ─── ファイル名（CSV / PNG 共通）─────────────
+          // ローカル時刻で YYYY-MM-DD_HHMMSS。UTC の ISO 形式は日本時間と 9 時間
+          // ずれて分かりにくいため使わない。
+          function makeStamp(d) {
+            const _d = d || new Date();
+            const _p = n => String(n).padStart(2, '0');
+            return `${_d.getFullYear()}-${_p(_d.getMonth() + 1)}-${_p(_d.getDate())}`
+            + `_${_p(_d.getHours())}${_p(_d.getMinutes())}${_p(_d.getSeconds())}`;
+          }
+          // 走行スタンプが無い場合 (Record を経ずに書き出したとき) だけ現在時刻に落ちる。
+          function fileBase() {
+            if (!runStamp) runStamp = makeStamp();
+            return `doppler_${runStamp}`;
+          }
+
           function showCsvModal() {
             const csv  = buildCsv();
             const rows = csv.split('\n').length - 2;
@@ -1730,6 +1808,210 @@
           }
           
           // ═══════════════════════════════════════════════
+          //  画像書き出し（レポート貼付用）
+          // ═══════════════════════════════════════════════
+          //  設計方針:
+          //   - 画面のコピーではなく「レポートに貼る 1 枚」を組版する。canvas の
+          //     縦横比はウィンドウサイズ依存なので、画面をそのまま出すと生徒ごとに
+          //     別物の図になり、教員が並べて比較できない。ここは固定レイアウト。
+          //   - 画面には出ているが canvas には無い数値 (f₀・振幅・点数・記録時間) を
+          //     見出し帯として載せる。スクリーンショットの代わりを求められているので、
+          //     図だけでなく「記録票」として成立させる。
+          //   - 描画は既存の draw*() をそのまま流用し、オフスクリーンで 2 倍に描く
+          //     (DPR ではなく固定 2 倍 = どの PC でも同じ画像が出る)。
+          //   - 画面の canvas には一切触らない (再描画のちらつきを避ける)。
+          // ═══════════════════════════════════════════════
+          const IMG_SCALE = 2;      // 常に 2 倍で描画（PNG 実寸 = 論理サイズ × 2）
+          const IMG_W     = 1000;   // 論理幅 (pt)
+          const IMG_M     = 28;     // 余白
+          const IMG_HEAD  = 52;     // 見出し帯
+          const IMG_STAT  = 62;     // 数値行
+          const IMG_TITLE = 20;     // 各グラフの見出し
+          const IMG_FOOT  = 26;     // 帰属表示
+
+          function _newCtx(w, h) {
+            const c = document.createElement('canvas');
+            c.width  = Math.round(w * IMG_SCALE);
+            c.height = Math.round(h * IMG_SCALE);
+            const g = c.getContext('2d');
+            g._s = IMG_SCALE;                        // _cw/_ch が論理サイズを戻すための印
+            g.setTransform(IMG_SCALE, 0, 0, IMG_SCALE, 0, 0);
+            return g;
+          }
+
+          function _median(arr) {
+            if (!arr.length) return null;
+            const s = [...arr].sort((a, b) => a - b);
+            return s[Math.floor(s.length / 2)];
+          }
+
+          // 画像に載せる数値。画面の stat-card と同じ量だが、振幅だけは
+          // 中央値にする（最終フレームの振幅は記録終了後の値で意味を持たないため）。
+          function imgStats() {
+            const cf   = calibrationFactor();
+            const ok   = freqSession.filter(f => f.freq_ok);
+            const amps = freqSession.map(f => f.amplitude).filter(v => v != null);
+            const ampMed = _median(amps);
+            const dur = recordEndTime_s > 0 ? recordEndTime_s
+            : (freqSession.length ? freqSession[freqSession.length - 1].elapsed_s : 0);
+            const runStr = scatterRunCount > 1 ? ` / ${scatterRunCount} 走行` : '';
+            return [
+              ['f₀ (静止時中央値)', `${(computeFRef() * cf).toFixed(2)} Hz`],
+              ['振幅 (中央値)',      ampMed == null ? '—' : ampMed.toFixed(0)],
+              ['記録時間',           `${dur.toFixed(1)} s`],
+              ['データ点数',         `${ok.length} pts${runStr}`],
+              ['欠測 (drop)',        `${totalDropCount}`],
+            ];
+          }
+
+          function imgFileBase(mode) {
+            const sfx = mode === 'scatter' ? '_scatter' : (mode === 'timeseries' ? '_timeseries' : '');
+            return `${fileBase()}${sfx}`;
+          }
+
+          // runStamp (YYYY-MM-DD_HHMMSS) を人が読む形に戻す
+          function stampToText(s) {
+            const m = /^(\d{4})-(\d{2})-(\d{2})_(\d{2})(\d{2})(\d{2})$/.exec(s || '');
+            return m ? `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}:${m[6]}` : '';
+          }
+
+          function buildExportCanvas(mode) {
+            const CW      = IMG_W - IMG_M * 2;
+            const hasPos  = posValues.length  >= 2;
+            const hasFreq = freqValues.length >= 2;
+
+            const blocks = [];
+            if (mode !== 'scatter') {
+              if (hasPos) {
+                blocks.push({ title: '位置 (m)',   w: CW, h: 150,
+                    draw: g => drawChart(g, posValues, '#0077cc', posTimeValues, null, 'm') });
+                blocks.push({ title: '速度 (m/s)', w: CW, h: 120,
+                    draw: g => drawVelChart(g, velValues, velSmoothValues, posTimeValues, null) });
+              }
+              if (hasFreq) {
+                blocks.push({ title: '周波数 (Hz)', w: CW, h: 150,
+                    draw: g => drawFreqChart(g, freqValues, freqTimeValues, null) });
+              }
+              blocks.push({ caption: '時間 (s)' });
+            }
+            if (mode !== 'timeseries' && hasPos && hasFreq) {
+              blocks.push({
+                  title: '速度 v (m/s) と 周波数シフト Δf = f_obs − f₀ (Hz) の散布図',
+                  w: mode === 'scatter' ? CW : 660,
+                  h: mode === 'scatter' ? 460 : 400,
+                  draw: g => drawScatter(g),
+              });
+            }
+
+            const blockH = blocks.reduce((s, b) =>
+            s + (b.caption ? 22 : IMG_TITLE + b.h + 12), 0);
+            const H = IMG_M + IMG_HEAD + IMG_STAT + 14 + blockH + IMG_FOOT + IMG_M;
+
+            const g = _newCtx(IMG_W, H);
+            g.fillStyle = '#ffffff';
+            g.fillRect(0, 0, IMG_W, H);
+
+            let y = IMG_M;
+
+            // ---- 見出し帯 ----
+            g.textAlign = 'left'; g.textBaseline = 'alphabetic';
+            g.fillStyle = '#0077cc';
+            g.font = '800 17px "Exo 2", sans-serif';
+            g.fillText('DOPPLER CART MONITOR', IMG_M, y + 16);
+            g.textAlign = 'right';
+            g.fillStyle = '#5a6b7a';
+            g.font = '11px "Share Tech Mono", monospace';
+            g.fillText(`${imgFileBase(mode)}.png`, IMG_W - IMG_M, y + 8);
+            g.fillText(`記録 ${stampToText(runStamp)}`, IMG_W - IMG_M, y + 24);
+            g.strokeStyle = '#c4ccd4'; g.lineWidth = 1;
+            g.beginPath(); g.moveTo(IMG_M, y + 36); g.lineTo(IMG_W - IMG_M, y + 36); g.stroke();
+            y += IMG_HEAD;
+
+            // ---- 数値行 ----
+            const stats = imgStats();
+            const cellW = CW / stats.length;
+            g.strokeStyle = '#c4ccd4'; g.lineWidth = 1;
+            g.beginPath();
+            if (g.roundRect) g.roundRect(IMG_M + 0.5, y + 0.5, CW - 1, IMG_STAT - 8, 6);
+            else             g.rect(IMG_M + 0.5, y + 0.5, CW - 1, IMG_STAT - 8);
+            g.stroke();
+            stats.forEach(([label, value], i) => {
+                const x = IMG_M + cellW * i;
+                if (i > 0) {
+                  g.strokeStyle = '#dde3e9';
+                  g.beginPath(); g.moveTo(x, y + 8); g.lineTo(x, y + IMG_STAT - 16); g.stroke();
+                }
+                g.textAlign = 'left';
+                g.fillStyle = '#5a6b7a';
+                g.font = '9px "Exo 2", sans-serif';
+                g.fillText(label, x + 12, y + 18);
+                g.fillStyle = '#1a2b3c';
+                g.font = '15px "Share Tech Mono", monospace';
+                g.fillText(value, x + 12, y + 40);
+            });
+            y += IMG_STAT + 14;
+
+            // ---- グラフ ----
+            for (const b of blocks) {
+              if (b.caption) {
+                g.textAlign = 'center';
+                g.fillStyle = '#5a6b7a';
+                g.font = '11px "Share Tech Mono", monospace';
+                g.fillText(b.caption, IMG_M + CW / 2, y + 14);
+                y += 22;
+                continue;
+              }
+              g.textAlign = 'left';
+              g.fillStyle = '#5a6b7a';
+              g.font = '11px "Exo 2", sans-serif';
+              g.fillText(b.title, IMG_M, y + 13);
+              y += IMG_TITLE;
+              const x = IMG_M + (CW - b.w) / 2;      // 幅の狭いブロック（散布図）は中央
+              const sub = _newCtx(b.w, b.h);
+              b.draw(sub);
+              g.strokeStyle = '#c4ccd4'; g.lineWidth = 1;
+              g.strokeRect(x + 0.5, y + 0.5, b.w - 1, b.h - 1);
+              g.drawImage(sub.canvas, x, y, b.w, b.h);
+              y += b.h + 12;
+            }
+
+            // ---- 帰属表示 ----
+            g.textAlign = 'center';
+            g.fillStyle = '#8a97a3';
+            g.font = '9px "Exo 2", sans-serif';
+            g.fillText('Physics Exam Lab - Doppler Cart  |  © 2026 一般社団法人 国際物理オリンピック2023記念協会  |  CC BY-NC 4.0',
+            IMG_W / 2, H - IMG_M + 4);
+
+            return g.canvas;
+          }
+
+          let imgMode   = 'all';
+          let imgCanvas = null;
+
+          function refreshImgPreview() {
+            imgCanvas = buildExportCanvas(imgMode);
+            document.getElementById('imgPreview').src = imgCanvas.toDataURL('image/png');
+            document.getElementById('imgInfo').textContent =
+            `${imgCanvas.width} × ${imgCanvas.height} px  /  ${imgFileBase(imgMode)}.png`;
+          }
+
+          async function showImgModal() {
+            // Web フォント確定前に描くと字形が変わるので待つ（初期化と同じ作法）
+            if (document.fonts && document.fonts.ready) { try { await document.fonts.ready; } catch (_) {} }
+            // 散布図は位置と周波数の両方が要る。時系列だけの走行では選ばせない。
+            const canScatter = posValues.length >= 2 && freqValues.length >= 2;
+            document.querySelectorAll('#imgRange button').forEach(b => {
+                b.disabled = (b.dataset.mode === 'scatter') && !canScatter;
+            });
+            if (imgMode === 'scatter' && !canScatter) imgMode = 'all';
+            document.querySelectorAll('#imgRange button').forEach(b => {
+                b.classList.toggle('active', b.dataset.mode === imgMode);
+            });
+            refreshImgPreview();
+            document.getElementById('imgModal').classList.add('open');
+          }
+
+          // ═══════════════════════════════════════════════
           //  イベントリスナー
           // ═══════════════════════════════════════════════
           document.getElementById('btnConnectCart').addEventListener('click', connectSmartCart);
@@ -1738,9 +2020,51 @@
           document.getElementById('btnStop').addEventListener('click',  stopRecording);
           document.getElementById('btnReset').addEventListener('click', resetAll);
           document.getElementById('btnCsv').addEventListener('click',   showCsvModal);
-          
+          document.getElementById('btnImg').addEventListener('click',   showImgModal);
+
           document.getElementById('btnCloseModal').addEventListener('click', () => {
               document.getElementById('csvModal').classList.remove('open');
+          });
+          document.getElementById('btnCloseImgModal').addEventListener('click', () => {
+              document.getElementById('imgModal').classList.remove('open');
+          });
+          document.getElementById('imgRange').addEventListener('click', (e) => {
+              const b = e.target.closest('button');
+              if (!b || b.disabled) return;
+              imgMode = b.dataset.mode;
+              document.querySelectorAll('#imgRange button').forEach(x => {
+                  x.classList.toggle('active', x === b);
+              });
+              refreshImgPreview();
+          });
+          document.getElementById('btnImgSave').addEventListener('click', () => {
+              const name = `${imgFileBase(imgMode)}.png`;
+              imgCanvas.toBlob(blob => {
+                  const url = URL.createObjectURL(blob);
+                  const a   = document.createElement('a');
+                  a.href = url; a.download = name;
+                  a.click();
+                  URL.revokeObjectURL(url);
+              }, 'image/png');
+              const btn = document.getElementById('btnImgSave');
+              btn.textContent = '保存しました';
+              setTimeout(() => { btn.textContent = '画像を保存'; }, 1400);
+          });
+          document.getElementById('btnImgCopy').addEventListener('click', async () => {
+              const btn = document.getElementById('btnImgCopy');
+              try {
+                // toBlob は非同期でユーザ操作の文脈を失うため、Blob そのものではなく
+                // Blob に解決する Promise を ClipboardItem に渡す (Chrome の作法)。
+                const item = new ClipboardItem({
+                    'image/png': new Promise(res => imgCanvas.toBlob(res, 'image/png')),
+                });
+                await navigator.clipboard.write([item]);
+                btn.textContent = 'コピーしました';
+              } catch (e) {
+                console.warn('[img] clipboard write failed:', e);
+                btn.textContent = 'コピー不可 → 保存へ';
+              }
+              setTimeout(() => { btn.textContent = '画像をコピー'; }, 1600);
           });
           document.getElementById('btnCopy').addEventListener('click', async () => {
               // 表計算に貼るならタブ区切りが確実。CSV のまま貼ると 1 列に入ってしまい、
@@ -1775,14 +2099,10 @@
               const url  = URL.createObjectURL(blob);
               const a    = document.createElement('a');
               a.href     = url;
-              // ファイル名はローカル時刻で YYYY-MM-DD_HHMMSS（UTC の ISO 形式は
-              // 日本時間と 9 時間ずれて分かりにくいため。"_iq_" は IQ 法導入時の
-              // 旧版との区別用で現在は不要なので削除）
-              const _d = new Date();
-              const _p = n => String(n).padStart(2, '0');
-              const _stamp = `${_d.getFullYear()}-${_p(_d.getMonth() + 1)}-${_p(_d.getDate())}`
-              + `_${_p(_d.getHours())}${_p(_d.getMinutes())}${_p(_d.getSeconds())}`;
-              a.download = `doppler_${_stamp}.csv`;
+              // ファイル名は「保存した時刻」ではなく走行スタンプ (= Record を押した
+              // 時刻)。同じデータから出した PNG と対になる。("_iq_" は IQ 法導入時の
+              // 旧版との区別用で現在は不要なので削除)
+              a.download = `${fileBase()}.csv`;
               a.click();
               URL.revokeObjectURL(url);
           });
